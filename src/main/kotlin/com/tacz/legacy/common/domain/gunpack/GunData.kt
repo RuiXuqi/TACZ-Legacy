@@ -10,13 +10,22 @@ public data class GunData(
     val canSlide: Boolean,
     val boltType: GunBoltType,
     val roundsPerMinute: Int,
+    val drawTimeSeconds: Float = GunDefaults.DRAW_TIME_SECONDS,
+    val putAwayTimeSeconds: Float = GunDefaults.PUT_AWAY_TIME_SECONDS,
+    val sprintTimeSeconds: Float = GunDefaults.SPRINT_TIME_SECONDS,
     val aimTimeSeconds: Float = GunDefaults.AIM_TIME_SECONDS,
+    val boltActionTimeSeconds: Float = 0f,
+    val boltFeedTimeSeconds: Float = -1f,
     val fireModes: Set<GunFireMode>,
+    val burstData: GunBurstData = GunBurstData(),
     val crawlRecoilMultiplier: Float = GunDefaults.CRAWL_RECOIL_MULTIPLIER,
+    val hurtBobTweakMultiplier: Float = GunDefaults.HURT_BOB_TWEAK_MULTIPLIER,
     val recoil: GunRecoilData = GunRecoilData(),
     val inaccuracy: GunInaccuracyData = GunInaccuracyData(),
     val bullet: GunBulletData,
     val reload: GunReloadData,
+    val moveSpeed: GunMoveSpeedData = GunMoveSpeedData(),
+    val melee: GunMeleeData = GunMeleeData(),
     val scriptParams: Map<String, Float> = emptyMap()
 )
 
@@ -47,6 +56,11 @@ public data class GunBulletData(
     val gravity: Float,
     val pierce: Int,
     val friction: Float = GunDefaults.BULLET_FRICTION,
+    val knockback: Float = 0f,
+    val ignite: GunIgniteData = GunIgniteData(),
+    val igniteEntityTime: Int = 2,
+    val tracerCountInterval: Int = -1,
+    val explosion: GunExplosionData? = null,
     val extraDamage: GunExtraDamageData = GunExtraDamageData()
 )
 
@@ -59,6 +73,49 @@ public data class GunExtraDamageData(
 public data class GunDistanceDamagePair(
     val distance: Float,
     val damage: Float
+)
+
+public data class GunIgniteData(
+    val entity: Boolean = false,
+    val block: Boolean = false
+)
+
+public data class GunExplosionData(
+    val explode: Boolean = false,
+    val radius: Float = 0f,
+    val damage: Float = 0f,
+    val knockback: Boolean = false,
+    val destroyBlock: Boolean = false,
+    val delaySeconds: Float = 30f
+)
+
+public data class GunMoveSpeedData(
+    val baseMultiplier: Float = 0f,
+    val aimMultiplier: Float = 0f,
+    val reloadMultiplier: Float = 0f
+)
+
+public data class GunMeleeData(
+    val distance: Float = 1f,
+    val cooldownSeconds: Float = 1f,
+    val defaultMelee: GunDefaultMeleeData? = null
+)
+
+public data class GunDefaultMeleeData(
+    val animationType: String = "melee_push",
+    val distance: Float = 1f,
+    val rangeAngle: Float = 30f,
+    val cooldownSeconds: Float = 0f,
+    val damage: Float = 0f,
+    val knockback: Float = 0.2f,
+    val prepTimeSeconds: Float = 0.1f
+)
+
+public data class GunBurstData(
+    val continuousShoot: Boolean = false,
+    val count: Int = 3,
+    val bpm: Int = 200,
+    val minInterval: Double = 1.0
 )
 
 public data class GunReloadData(
@@ -123,8 +180,12 @@ public enum class GunFeedType {
 public object GunDefaults {
     public const val AMMO_AMOUNT: Int = 30
     public const val RPM: Int = 300
+    public const val DRAW_TIME_SECONDS: Float = 0.4f
+    public const val PUT_AWAY_TIME_SECONDS: Float = 0.4f
+    public const val SPRINT_TIME_SECONDS: Float = 0.2f
     public const val AIM_TIME_SECONDS: Float = 0.2f
     public const val CRAWL_RECOIL_MULTIPLIER: Float = 0.5f
+    public const val HURT_BOB_TWEAK_MULTIPLIER: Float = 0.05f
     public const val INACCURACY_STAND: Float = 4.5f
     public const val INACCURACY_MOVE: Float = 5.0f
     public const val INACCURACY_SNEAK: Float = 2.5f

@@ -1,6 +1,7 @@
 package com.tacz.legacy.common.infrastructure.mc.weapon
 
 import com.tacz.legacy.common.application.port.DistanceDamagePairDto
+import com.tacz.legacy.common.application.port.ExplosionDto
 import com.tacz.legacy.common.application.port.Vec3d
 import com.tacz.legacy.common.application.gunpack.GunDisplayDefinition
 import com.tacz.legacy.common.application.gunpack.GunDisplayRuntime
@@ -234,6 +235,18 @@ public class WeaponPlayerTickEventHandler(
                 bulletDamageAdjust = weaponDefinition?.ballistics?.damageAdjust?.map {
                     DistanceDamagePairDto(distance = it.distance, damage = it.damage)
                 } ?: fallback.bulletDamageAdjust,
+                bulletKnockback = weaponDefinition?.ballistics?.knockback ?: fallback.bulletKnockback,
+                bulletIgniteEntity = weaponDefinition?.ballistics?.igniteEntity ?: fallback.bulletIgniteEntity,
+                bulletIgniteEntityTime = weaponDefinition?.ballistics?.igniteEntityTime ?: fallback.bulletIgniteEntityTime,
+                bulletExplosion = weaponDefinition?.ballistics?.explosion?.let {
+                    ExplosionDto(
+                        radius = it.radius,
+                        damage = it.damage,
+                        knockback = it.knockback,
+                        destroyBlock = it.destroyBlock,
+                        delaySeconds = it.delaySeconds
+                    )
+                } ?: fallback.bulletExplosion,
                 fireSoundPitchJitter = FIRE_SOUND_PITCH_JITTER
             ),
             reloadTicks = weaponDefinition?.spec?.reloadTicks,

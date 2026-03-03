@@ -11,6 +11,7 @@ import net.minecraft.util.math.AxisAlignedBB
 import net.minecraft.util.math.RayTraceResult
 import net.minecraft.util.math.Vec3d
 import net.minecraft.world.World
+import net.minecraft.world.WorldServer
 
 public class LegacyBulletEntity : EntityThrowable {
 
@@ -25,6 +26,13 @@ public class LegacyBulletEntity : EntityThrowable {
     private var headShotMultiplier: Float = 1f
     private var damageAdjust: List<DamagePair> = emptyList()
     private var startPos: Vec3d = Vec3d.ZERO
+    private var knockbackStrength: Float = 0f
+    private var igniteEntity: Boolean = false
+    private var igniteEntityTime: Int = 2
+    private var explosionRadius: Float = 0f
+    private var explosionDamage: Float = 0f
+    private var explosionKnockback: Boolean = false
+    private var explosionDestroyBlock: Boolean = false
 
     public constructor(worldIn: World) : super(worldIn) {
         setSize(BULLET_SIZE, BULLET_SIZE)
@@ -49,7 +57,14 @@ public class LegacyBulletEntity : EntityThrowable {
         lifetimeTicks: Int,
         armorIgnore: Float = 0f,
         headShotMultiplier: Float = 1f,
-        damageAdjust: List<DamagePair> = emptyList()
+        damageAdjust: List<DamagePair> = emptyList(),
+        knockback: Float = 0f,
+        igniteEntity: Boolean = false,
+        igniteEntityTime: Int = 2,
+        explosionRadius: Float = 0f,
+        explosionDamage: Float = 0f,
+        explosionKnockback: Boolean = false,
+        explosionDestroyBlock: Boolean = false
     ) {
         configuredDamage = damage.coerceAtLeast(0.0f)
         configuredGravity = gravity.coerceAtLeast(0.0f)
@@ -60,6 +75,13 @@ public class LegacyBulletEntity : EntityThrowable {
         this.headShotMultiplier = headShotMultiplier.coerceAtLeast(0f)
         this.damageAdjust = damageAdjust
         this.startPos = Vec3d(posX, posY, posZ)
+        this.knockbackStrength = knockback.coerceAtLeast(0f)
+        this.igniteEntity = igniteEntity
+        this.igniteEntityTime = igniteEntityTime.coerceAtLeast(0)
+        this.explosionRadius = explosionRadius.coerceAtLeast(0f)
+        this.explosionDamage = explosionDamage.coerceAtLeast(0f)
+        this.explosionKnockback = explosionKnockback
+        this.explosionDestroyBlock = explosionDestroyBlock
     }
 
     public override fun onUpdate() {
@@ -150,8 +172,25 @@ public class LegacyBulletEntity : EntityThrowable {
 
                 val attacked = applyDamageWithArmorIgnore(target, damage)
                 if (attacked) {
+                    if (knockbackStrength > 0f && target is EntityLivingBase) {
+                        val knockVec = Vec3d(motionX, motionY, motionZ).normalize()
+                        target.addVelocity(
+                            knockVec.x * knockbackStrength,
+                            0.1 * knockbackStrength,
+                            knockVec.z * knockbackStrength
+                        )
+                        target.velocityChanged = true
+                    }
+
+                    if (igniteEntity && igniteEntityTime > 0) {
+                        target.setFire(igniteEntityTime)
+                    }
+
                     remainingPierce -= 1
                     if (remainingPierce <= 0) {
+                        if (explosionRadius > 0f) {
+                            createExplosion()
+                        }
                         setDead()
                     }
                 } else {
@@ -160,11 +199,25 @@ public class LegacyBulletEntity : EntityThrowable {
             }
 
             RayTraceResult.Type.BLOCK -> {
+                if (explosionRadius > 0f) {
+                    createExplosion()
+                }
                 setDead()
             }
 
             else -> Unit
         }
+    }
+
+    private fun createExplosion() {
+        if (world.isRemote) return
+        val causeExplosion = !explosionKnockback
+        world.createExplosion(
+            thrower ?: this,
+            posX, posY, posZ,
+            explosionRadius,
+            explosionDestroyBlock
+        )
     }
 
     private fun getDamageForDistance(hitVec: Vec3d): Float {
@@ -247,6 +300,13 @@ public class LegacyBulletEntity : EntityThrowable {
         compound.setDouble(TAG_START_X, startPos.x)
         compound.setDouble(TAG_START_Y, startPos.y)
         compound.setDouble(TAG_START_Z, startPos.z)
+        compound.setFloat(TAG_KNOCKBACK, knockbackStrength)
+        compound.setBoolean(TAG_IGNITE_ENTITY, igniteEntity)
+        compound.setInteger(TAG_IGNITE_TIME, igniteEntityTime)
+        compound.setFloat(TAG_EXPLOSION_RADIUS, explosionRadius)
+        compound.setFloat(TAG_EXPLOSION_DAMAGE, explosionDamage)
+        compound.setBoolean(TAG_EXPLOSION_KNOCKBACK, explosionKnockback)
+        compound.setBoolean(TAG_EXPLOSION_DESTROY_BLOCK, explosionDestroyBlock)
 
         if (damageAdjust.isNotEmpty()) {
             val list = NBTTagList()
@@ -296,6 +356,14 @@ public class LegacyBulletEntity : EntityThrowable {
             }
             damageAdjust = pairs
         }
+
+        knockbackStrength = compound.getFloat(TAG_KNOCKBACK).coerceAtLeast(0f)
+        igniteEntity = compound.getBoolean(TAG_IGNITE_ENTITY)
+        igniteEntityTime = compound.getInteger(TAG_IGNITE_TIME).coerceAtLeast(0)
+        explosionRadius = compound.getFloat(TAG_EXPLOSION_RADIUS).coerceAtLeast(0f)
+        explosionDamage = compound.getFloat(TAG_EXPLOSION_DAMAGE).coerceAtLeast(0f)
+        explosionKnockback = compound.getBoolean(TAG_EXPLOSION_KNOCKBACK)
+        explosionDestroyBlock = compound.getBoolean(TAG_EXPLOSION_DESTROY_BLOCK)
     }
 
     private fun applyFrictionCompensation() {
@@ -374,6 +442,13 @@ public class LegacyBulletEntity : EntityThrowable {
         private const val TAG_DAMAGE_ADJUST: String = "DamageAdjust"
         private const val TAG_PAIR_DISTANCE: String = "Dist"
         private const val TAG_PAIR_DAMAGE: String = "Dmg"
+        private const val TAG_KNOCKBACK: String = "Knockback"
+        private const val TAG_IGNITE_ENTITY: String = "IgniteEntity"
+        private const val TAG_IGNITE_TIME: String = "IgniteTime"
+        private const val TAG_EXPLOSION_RADIUS: String = "ExpRadius"
+        private const val TAG_EXPLOSION_DAMAGE: String = "ExpDamage"
+        private const val TAG_EXPLOSION_KNOCKBACK: String = "ExpKnockback"
+        private const val TAG_EXPLOSION_DESTROY_BLOCK: String = "ExpDestroyBlock"
     }
 
 }

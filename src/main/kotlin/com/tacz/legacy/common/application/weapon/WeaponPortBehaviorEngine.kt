@@ -3,6 +3,7 @@ package com.tacz.legacy.common.application.weapon
 import com.tacz.legacy.common.application.port.AudioPort
 import com.tacz.legacy.common.application.port.BulletCreationRequest
 import com.tacz.legacy.common.application.port.DistanceDamagePairDto
+import com.tacz.legacy.common.application.port.ExplosionDto
 import com.tacz.legacy.common.application.port.ParticlePort
 import com.tacz.legacy.common.application.port.ParticleRequest
 import com.tacz.legacy.common.application.port.RaycastHit
@@ -48,6 +49,10 @@ public data class WeaponBehaviorConfig(
     val bulletArmorIgnore: Float = 0f,
     val bulletHeadShotMultiplier: Float = 1f,
     val bulletDamageAdjust: List<DistanceDamagePairDto> = emptyList(),
+    val bulletKnockback: Float = 0f,
+    val bulletIgniteEntity: Boolean = false,
+    val bulletIgniteEntityTime: Int = 2,
+    val bulletExplosion: ExplosionDto? = null,
     val fireSoundPitchBase: Float = 1.0f,
     val fireSoundPitchJitter: Float = 0.0f
 )
@@ -193,7 +198,11 @@ public class WeaponPortBehaviorEngine(
                     inaccuracyDegrees = config.bulletInaccuracyDegrees,
                     armorIgnore = config.bulletArmorIgnore,
                     headShotMultiplier = config.bulletHeadShotMultiplier,
-                    damageAdjust = config.bulletDamageAdjust
+                    damageAdjust = config.bulletDamageAdjust,
+                    knockback = config.bulletKnockback,
+                    igniteEntity = config.bulletIgniteEntity,
+                    igniteEntityTime = config.bulletIgniteEntityTime,
+                    explosion = config.bulletExplosion
                 )
             )
             if (firstBulletEntityId == null) {

@@ -171,7 +171,14 @@ internal class MinecraftWorldPort(
                 headShotMultiplier = request.headShotMultiplier,
                 damageAdjust = request.damageAdjust.map {
                     LegacyBulletEntity.DamagePair(distance = it.distance, damage = it.damage)
-                }
+                },
+                knockback = request.knockback,
+                igniteEntity = request.igniteEntity,
+                igniteEntityTime = request.igniteEntityTime,
+                explosionRadius = request.explosion?.radius ?: 0f,
+                explosionDamage = request.explosion?.damage ?: 0f,
+                explosionKnockback = request.explosion?.knockback ?: false,
+                explosionDestroyBlock = request.explosion?.destroyBlock ?: false
             )
             shoot(
                 normalizedDirection.x,

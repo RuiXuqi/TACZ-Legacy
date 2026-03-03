@@ -83,12 +83,24 @@ public data class BulletCreationRequest(
     val inaccuracyDegrees: Float = 0.0f,
     val armorIgnore: Float = 0f,
     val headShotMultiplier: Float = 1f,
-    val damageAdjust: List<DistanceDamagePairDto> = emptyList()
+    val damageAdjust: List<DistanceDamagePairDto> = emptyList(),
+    val knockback: Float = 0f,
+    val igniteEntity: Boolean = false,
+    val igniteEntityTime: Int = 2,
+    val explosion: ExplosionDto? = null
 )
 
 public data class DistanceDamagePairDto(
     val distance: Float,
     val damage: Float
+)
+
+public data class ExplosionDto(
+    val radius: Float = 0f,
+    val damage: Float = 0f,
+    val knockback: Boolean = false,
+    val destroyBlock: Boolean = false,
+    val delaySeconds: Float = 30f
 )
 
 public interface WorldPort {

@@ -5,6 +5,12 @@ import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.tacz.legacy.common.domain.gunpack.GunBoltType
 import com.tacz.legacy.common.domain.gunpack.GunBulletData
+import com.tacz.legacy.common.domain.gunpack.GunBurstData
+import com.tacz.legacy.common.domain.gunpack.GunDefaultMeleeData
+import com.tacz.legacy.common.domain.gunpack.GunExplosionData
+import com.tacz.legacy.common.domain.gunpack.GunIgniteData
+import com.tacz.legacy.common.domain.gunpack.GunMeleeData
+import com.tacz.legacy.common.domain.gunpack.GunMoveSpeedData
 import com.tacz.legacy.common.domain.gunpack.GunPackCompatibilityReport
 import com.tacz.legacy.common.domain.gunpack.GunData
 import com.tacz.legacy.common.domain.gunpack.GunDefaults
@@ -120,7 +126,62 @@ public class GunPackCompatibilityParser {
             report = report
         )
 
+        val drawTimeSeconds = readFloat(
+            root = root,
+            primary = "draw_time",
+            aliases = listOf("drawTime"),
+            field = "draw_time",
+            defaultValue = GunDefaults.DRAW_TIME_SECONDS,
+            report = report
+        )
+
+        val putAwayTimeSeconds = readFloat(
+            root = root,
+            primary = "put_away_time",
+            aliases = listOf("putAwayTime"),
+            field = "put_away_time",
+            defaultValue = GunDefaults.PUT_AWAY_TIME_SECONDS,
+            report = report
+        )
+
+        val sprintTimeSeconds = readFloat(
+            root = root,
+            primary = "sprint_time",
+            aliases = listOf("sprintTime"),
+            field = "sprint_time",
+            defaultValue = GunDefaults.SPRINT_TIME_SECONDS,
+            report = report
+        )
+
+        val boltActionTimeSeconds = readFloat(
+            root = root,
+            primary = "bolt_action_time",
+            aliases = listOf("boltActionTime"),
+            field = "bolt_action_time",
+            defaultValue = 0f,
+            report = report
+        )
+
+        val boltFeedTimeSeconds = readFloat(
+            root = root,
+            primary = "bolt_feed_time",
+            aliases = listOf("boltFeedTime"),
+            field = "bolt_feed_time",
+            defaultValue = -1f,
+            report = report
+        )
+
+        val hurtBobTweakMultiplier = readFloat(
+            root = root,
+            primary = "hurt_bob_tweak_multiplier",
+            aliases = listOf("hurtBobTweakMultiplier"),
+            field = "hurt_bob_tweak_multiplier",
+            defaultValue = GunDefaults.HURT_BOB_TWEAK_MULTIPLIER,
+            report = report
+        )
+
         val fireModes = readFireModes(root, report)
+        val burstData = readBurstData(root, report)
         val crawlRecoilMultiplier = readFloat(
             root = root,
             primary = "crawl_recoil_multiplier",
@@ -132,6 +193,8 @@ public class GunPackCompatibilityParser {
         val recoil = readRecoil(root, report)
         val inaccuracy = readInaccuracy(root, report)
         val reload = readReload(root, report)
+        val moveSpeed = readMoveSpeed(root, report)
+        val melee = readMelee(root, report)
         val scriptParams = readScriptParams(root, report)
         val bullet = readBullet(root, report)
 
@@ -146,13 +209,22 @@ public class GunPackCompatibilityParser {
                 canSlide = canSlide,
                 boltType = boltType,
                 roundsPerMinute = roundsPerMinute,
+                drawTimeSeconds = drawTimeSeconds,
+                putAwayTimeSeconds = putAwayTimeSeconds,
+                sprintTimeSeconds = sprintTimeSeconds,
                 aimTimeSeconds = aimTimeSeconds,
+                boltActionTimeSeconds = boltActionTimeSeconds,
+                boltFeedTimeSeconds = boltFeedTimeSeconds,
                 fireModes = fireModes,
+                burstData = burstData,
                 crawlRecoilMultiplier = crawlRecoilMultiplier,
+                hurtBobTweakMultiplier = hurtBobTweakMultiplier,
                 recoil = recoil,
                 inaccuracy = inaccuracy,
                 bullet = bullet,
                 reload = reload,
+                moveSpeed = moveSpeed,
+                melee = melee,
                 scriptParams = scriptParams
             ),
             report
@@ -708,7 +780,179 @@ public class GunPackCompatibilityParser {
                 defaultValue = GunDefaults.BULLET_PIERCE,
                 report = report
             ),
+            knockback = readFloat(
+                root = bulletObjRoot,
+                primary = "knockback",
+                aliases = emptyList(),
+                field = "bullet.knockback",
+                defaultValue = 0f,
+                report = report
+            ),
+            ignite = readIgnite(bulletObjRoot, report),
+            igniteEntityTime = readInt(
+                root = bulletObjRoot,
+                primary = "ignite_entity_time",
+                aliases = listOf("igniteEntityTime"),
+                field = "bullet.ignite_entity_time",
+                defaultValue = 2,
+                report = report
+            ),
+            tracerCountInterval = readInt(
+                root = bulletObjRoot,
+                primary = "tracer_count_interval",
+                aliases = listOf("tracerCountInterval"),
+                field = "bullet.tracer_count_interval",
+                defaultValue = -1,
+                report = report
+            ),
+            explosion = readExplosion(bulletObjRoot, report),
             extraDamage = readExtraDamage(bulletObjRoot, report)
+        )
+    }
+
+    private fun readIgnite(bulletRoot: JsonObject, report: GunPackCompatibilityReport): GunIgniteData {
+        val field = bulletRoot.findField("ignite", emptyList(), "bullet.ignite", report)
+            ?: return GunIgniteData()
+
+        val obj = field.second
+        if (obj.isJsonPrimitive && obj.asJsonPrimitive.isBoolean) {
+            val value = obj.asBoolean
+            return GunIgniteData(entity = value, block = value)
+        }
+
+        if (!obj.isJsonObject) {
+            report.addWarning(
+                code = IssueCode.INVALID_FIELD_TYPE,
+                field = "bullet.ignite",
+                message = "Field 'bullet.ignite' should be a boolean or object, ignored."
+            )
+            return GunIgniteData()
+        }
+
+        val igniteRoot = obj.asJsonObject
+        return GunIgniteData(
+            entity = readBoolean(igniteRoot, "entity", emptyList(), "bullet.ignite.entity", false, report),
+            block = readBoolean(igniteRoot, "block", emptyList(), "bullet.ignite.block", false, report)
+        )
+    }
+
+    private fun readExplosion(bulletRoot: JsonObject, report: GunPackCompatibilityReport): GunExplosionData? {
+        val field = bulletRoot.findField("explosion", emptyList(), "bullet.explosion", report)
+            ?: return null
+
+        val obj = field.second
+        if (!obj.isJsonObject) {
+            report.addWarning(
+                code = IssueCode.INVALID_FIELD_TYPE,
+                field = "bullet.explosion",
+                message = "Field 'bullet.explosion' should be an object, ignored."
+            )
+            return null
+        }
+
+        val explosionRoot = obj.asJsonObject
+        return GunExplosionData(
+            explode = readBoolean(explosionRoot, "explode", emptyList(), "bullet.explosion.explode", false, report),
+            radius = readFloat(explosionRoot, "radius", emptyList(), "bullet.explosion.radius", 0f, report),
+            damage = readFloat(explosionRoot, "damage", emptyList(), "bullet.explosion.damage", 0f, report),
+            knockback = readBoolean(explosionRoot, "knockback", emptyList(), "bullet.explosion.knockback", false, report),
+            destroyBlock = readBoolean(explosionRoot, "destroy_block", listOf("destroyBlock"), "bullet.explosion.destroy_block", false, report),
+            delaySeconds = readFloat(explosionRoot, "delay", emptyList(), "bullet.explosion.delay", 30f, report)
+        )
+    }
+
+    private fun readBurstData(root: JsonObject, report: GunPackCompatibilityReport): GunBurstData {
+        val field = root.findField("burst_data", listOf("burstData"), "burst_data", report)
+            ?: return GunBurstData()
+
+        val obj = field.second
+        if (!obj.isJsonObject) {
+            report.addWarning(
+                code = IssueCode.INVALID_FIELD_TYPE,
+                field = "burst_data",
+                message = "Field 'burst_data' should be an object, ignored."
+            )
+            return GunBurstData()
+        }
+
+        val burstRoot = obj.asJsonObject
+        return GunBurstData(
+            continuousShoot = readBoolean(burstRoot, "continuous_shoot", listOf("continuousShoot"), "burst_data.continuous_shoot", false, report),
+            count = readInt(burstRoot, "count", emptyList(), "burst_data.count", 3, report),
+            bpm = readInt(burstRoot, "bpm", emptyList(), "burst_data.bpm", 200, report),
+            minInterval = readFloat(burstRoot, "min_interval", listOf("minInterval"), "burst_data.min_interval", 1f, report).toDouble()
+        )
+    }
+
+    private fun readMoveSpeed(root: JsonObject, report: GunPackCompatibilityReport): GunMoveSpeedData {
+        val field = root.findField("movement_speed", listOf("moveSpeed", "move_speed"), "movement_speed", report)
+            ?: return GunMoveSpeedData()
+
+        val obj = field.second
+        if (!obj.isJsonObject) {
+            report.addWarning(
+                code = IssueCode.INVALID_FIELD_TYPE,
+                field = "movement_speed",
+                message = "Field 'movement_speed' should be an object, ignored."
+            )
+            return GunMoveSpeedData()
+        }
+
+        val speedRoot = obj.asJsonObject
+        return GunMoveSpeedData(
+            baseMultiplier = readFloat(speedRoot, "base", emptyList(), "movement_speed.base", 0f, report),
+            aimMultiplier = readFloat(speedRoot, "aim", emptyList(), "movement_speed.aim", 0f, report),
+            reloadMultiplier = readFloat(speedRoot, "reload", emptyList(), "movement_speed.reload", 0f, report)
+        )
+    }
+
+    private fun readMelee(root: JsonObject, report: GunPackCompatibilityReport): GunMeleeData {
+        val field = root.findField("melee", emptyList(), "melee", report)
+            ?: return GunMeleeData()
+
+        val obj = field.second
+        if (!obj.isJsonObject) {
+            report.addWarning(
+                code = IssueCode.INVALID_FIELD_TYPE,
+                field = "melee",
+                message = "Field 'melee' should be an object, ignored."
+            )
+            return GunMeleeData()
+        }
+
+        val meleeRoot = obj.asJsonObject
+        val defaultMelee = readDefaultMelee(meleeRoot, report)
+
+        return GunMeleeData(
+            distance = readFloat(meleeRoot, "distance", emptyList(), "melee.distance", 1f, report),
+            cooldownSeconds = readFloat(meleeRoot, "cooldown", emptyList(), "melee.cooldown", 1f, report),
+            defaultMelee = defaultMelee
+        )
+    }
+
+    private fun readDefaultMelee(meleeRoot: JsonObject, report: GunPackCompatibilityReport): GunDefaultMeleeData? {
+        val field = meleeRoot.findField("default", emptyList(), "melee.default", report)
+            ?: return null
+
+        val obj = field.second
+        if (!obj.isJsonObject) {
+            report.addWarning(
+                code = IssueCode.INVALID_FIELD_TYPE,
+                field = "melee.default",
+                message = "Field 'melee.default' should be an object, ignored."
+            )
+            return null
+        }
+
+        val defaultRoot = obj.asJsonObject
+        return GunDefaultMeleeData(
+            animationType = readString(defaultRoot, "animation_type", listOf("animationType"), "melee.default.animation_type", report) ?: "melee_push",
+            distance = readFloat(defaultRoot, "distance", emptyList(), "melee.default.distance", 1f, report),
+            rangeAngle = readFloat(defaultRoot, "range_angle", listOf("rangeAngle"), "melee.default.range_angle", 30f, report),
+            cooldownSeconds = readFloat(defaultRoot, "cooldown", emptyList(), "melee.default.cooldown", 0f, report),
+            damage = readFloat(defaultRoot, "damage", emptyList(), "melee.default.damage", 0f, report),
+            knockback = readFloat(defaultRoot, "knockback", emptyList(), "melee.default.knockback", 0.2f, report),
+            prepTimeSeconds = readFloat(defaultRoot, "prep", listOf("prepTime"), "melee.default.prep", 0.1f, report)
         )
     }
 

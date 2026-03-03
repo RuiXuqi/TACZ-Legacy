@@ -26,12 +26,24 @@ public data class WeaponBallistics(
     val inaccuracy: WeaponInaccuracyProfile = WeaponInaccuracyProfile(),
     val armorIgnore: Float = 0f,
     val headShotMultiplier: Float = 1f,
-    val damageAdjust: List<WeaponDistanceDamagePair> = emptyList()
+    val damageAdjust: List<WeaponDistanceDamagePair> = emptyList(),
+    val knockback: Float = 0f,
+    val igniteEntity: Boolean = false,
+    val igniteEntityTime: Int = 2,
+    val explosion: WeaponExplosionData? = null
 )
 
 public data class WeaponDistanceDamagePair(
     val distance: Float,
     val damage: Float
+)
+
+public data class WeaponExplosionData(
+    val radius: Float = 0f,
+    val damage: Float = 0f,
+    val knockback: Boolean = false,
+    val destroyBlock: Boolean = false,
+    val delaySeconds: Float = 30f
 )
 
 public data class WeaponInaccuracyProfile(
@@ -115,6 +127,18 @@ public class WeaponRuntimeRegistry(
                         headShotMultiplier = data.bullet.extraDamage.headShotMultiplier.coerceAtLeast(0f),
                         damageAdjust = data.bullet.extraDamage.damageAdjust.map {
                             WeaponDistanceDamagePair(distance = it.distance, damage = it.damage)
+                        },
+                        knockback = data.bullet.knockback.coerceAtLeast(0f),
+                        igniteEntity = data.bullet.ignite.entity,
+                        igniteEntityTime = data.bullet.igniteEntityTime.coerceAtLeast(0),
+                        explosion = data.bullet.explosion?.takeIf { it.explode }?.let {
+                            WeaponExplosionData(
+                                radius = it.radius.coerceAtLeast(0f),
+                                damage = it.damage.coerceAtLeast(0f),
+                                knockback = it.knockback,
+                                destroyBlock = it.destroyBlock,
+                                delaySeconds = it.delaySeconds.coerceAtLeast(0f)
+                            )
                         }
                     )
 
