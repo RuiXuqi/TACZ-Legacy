@@ -52,11 +52,13 @@ internal class GunAnimationControllerSession(
         transitionTimeS: Float = DEFAULT_TRANSITION_TIME_S,
         forceRestartNames: Set<String> = emptySet()
     ) {
+        val nextActiveTracks = mutableSetOf<Int>()
         for (snapshot in snapshots) {
             val trackKey = snapshot.trackKey
             if (snapshot.animationName.isBlank()) continue
 
             val controllerTrack = resolveControllerTrack(trackKey)
+            nextActiveTracks.add(controllerTrack)
             val currentAnim = activeAnimationByTrack[controllerTrack]
 
             if (currentAnim != snapshot.animationName || forceRestartNames.contains(snapshot.animationName)) {
@@ -78,10 +80,17 @@ internal class GunAnimationControllerSession(
                 activeAnimationByTrack[controllerTrack] = snapshot.animationName
             }
         }
+
+        // 清除不再存在的轨道
+        val toRemove = activeAnimationByTrack.keys.filter { it !in nextActiveTracks }
+        for (track in toRemove) {
+            controller.removeAnimation(track)
+            activeAnimationByTrack.remove(track)
+        }
     }
 
     /**
-     * 帧更新：清空模型 → controller.update() → 收集变换。
+     * 驱动系统更新一帧
      */
     fun updateAndCollectPose(): LegacyAnimationPose {
         model.cleanAllTransforms()

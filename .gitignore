@@ -24,3 +24,6 @@ run
 
 # vscode
 *.code-workspace
+
+# kotlin
+.kotlin
