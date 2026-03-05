@@ -93,12 +93,15 @@ public object WeaponAnimationRuntimeRegistry {
         val track = tracksBySessionId[sessionId]
         val current = if (track == null || track.gunId != normalizedGunId) {
             val normalizedPlan = shellEjectPlan.normalized()
+            val initialClip = WeaponAnimationClipType.DRAW
+            val drawDuration = clipDurationOverridesMillis[WeaponAnimationClipType.DRAW]?.takeIf { it > 0L }
+                ?: DRAW_CLIP_DURATION_MS
             SessionTrack(
                 gunId = normalizedGunId,
-                clip = WeaponAnimationClipType.IDLE,
+                clip = initialClip,
                 clipSource = clipSource,
                 clipStartedAtMillis = nowMillis,
-                clipDurationMillis = 0L,
+                clipDurationMillis = drawDuration,
                 lastUpdatedAtMillis = nowMillis,
                 reloadTicksTotalHint = null,
                 reloadTicksRemainingHint = null,
@@ -106,7 +109,7 @@ public object WeaponAnimationRuntimeRegistry {
                 preferBoltCycleAfterFire = preferBoltCycleAfterFire,
                 boltClipDurationMillisHint = resolveBoltClipDurationHint(clipDurationOverridesMillis),
                 shellEjectPlan = normalizedPlan,
-                shellEjectTriggerMillisForCurrentClip = normalizedPlan.triggerForClip(WeaponAnimationClipType.IDLE),
+                shellEjectTriggerMillisForCurrentClip = normalizedPlan.triggerForClip(initialClip),
                 shellEjectEmittedForCurrentClip = false,
                 nextEventSequence = 0L,
                 pendingTransientEvents = mutableListOf()

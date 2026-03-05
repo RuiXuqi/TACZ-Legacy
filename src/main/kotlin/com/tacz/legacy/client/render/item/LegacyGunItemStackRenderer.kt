@@ -2140,12 +2140,14 @@ public object LegacyGunItemStackRenderer : TileEntityItemStackRenderer() {
             state.putAwayStartedAtMillis = System.currentTimeMillis()
 
             if (prev != null) {
+                val prevDisplay = GunDisplayRuntime.registry().snapshot().findDefinition(prev)
+                val putAwayAnimName = prevDisplay?.animationPutAwayClipName ?: "put_away"
                 val prevSession = animationSessions["${sessionId}_${prev}"]
                 prevSession?.let {
                     it.syncFromSnapshots(listOf(
                         SessionTrack(
                             trackKey = "0:0",
-                            animationName = "put_away",
+                            animationName = putAwayAnimName,
                             playMode = SessionTrackPlayMode.PLAY_ONCE_STOP,
                             progress = 0f
                         )
@@ -2166,9 +2168,10 @@ public object LegacyGunItemStackRenderer : TileEntityItemStackRenderer() {
 
         if (actualRenderGunId == gunId && runtimeSnapshot != null && runtimeSnapshot.gunId.trim().lowercase().substringAfter(":") == gunId.lowercase()) {
             val tracks = mutableListOf<SessionTrack>()
-            tracks.add(SessionTrack("0:0", "static_idle", SessionTrackPlayMode.LOOP, 0f))
+            val idleName = actualDisplay.animationIdleClipName ?: "static_idle"
+            tracks.add(SessionTrack("0:0", idleName, SessionTrackPlayMode.LOOP, 0f))
             
-            val clipName = mapClipTypeToAnimName(runtimeSnapshot.clip)
+            val clipName = resolveClipAnimationName(runtimeSnapshot.clip, actualDisplay)
             
             val clipStartBaseMillis = runtimeSnapshot.clipStartedAtMillis
             val clipRestarted = state.lastClipType == runtimeSnapshot.clip && (kotlin.math.abs(clipStartBaseMillis - state.lastClipStartBaseMillis) > 50L)
@@ -2201,15 +2204,15 @@ public object LegacyGunItemStackRenderer : TileEntityItemStackRenderer() {
     }
 
 
-    private fun mapClipTypeToAnimName(clip: WeaponAnimationClipType): String? {
+    private fun resolveClipAnimationName(clip: WeaponAnimationClipType, display: GunDisplayDefinition): String? {
         return when (clip) {
-            WeaponAnimationClipType.FIRE -> "shoot"
-            WeaponAnimationClipType.RELOAD -> "reload"
-            WeaponAnimationClipType.DRAW -> "draw"
-            WeaponAnimationClipType.PUT_AWAY -> "put_away"
-            WeaponAnimationClipType.INSPECT -> "inspect"
-            WeaponAnimationClipType.DRY_FIRE -> "dry_fire"
-            WeaponAnimationClipType.BOLT -> "bolt"
+            WeaponAnimationClipType.FIRE -> display.animationFireClipName ?: "shoot"
+            WeaponAnimationClipType.RELOAD -> display.animationReloadClipName ?: "reload"
+            WeaponAnimationClipType.DRAW -> display.animationDrawClipName ?: "draw"
+            WeaponAnimationClipType.PUT_AWAY -> display.animationPutAwayClipName ?: "put_away"
+            WeaponAnimationClipType.INSPECT -> display.animationInspectClipName ?: "inspect"
+            WeaponAnimationClipType.DRY_FIRE -> display.animationDryFireClipName ?: "dry_fire"
+            WeaponAnimationClipType.BOLT -> display.animationBoltClipName ?: "bolt"
             else -> null
         }
     }
