@@ -63,6 +63,7 @@ public data class WeaponAnimationRuntimeSnapshot(
     val elapsedMillis: Long,
     val durationMillis: Long,
     val lastUpdatedAtMillis: Long,
+    val clipStartedAtMillis: Long = 0L,
     val transientEvents: List<WeaponAnimationRuntimeEvent> = emptyList()
 )
 
@@ -272,6 +273,7 @@ public object WeaponAnimationRuntimeRegistry {
             elapsedMillis = elapsed,
             durationMillis = track.clipDurationMillis,
             lastUpdatedAtMillis = track.lastUpdatedAtMillis,
+            clipStartedAtMillis = track.clipStartedAtMillis,
             transientEvents = track.pendingTransientEvents.toList()
         )
     }

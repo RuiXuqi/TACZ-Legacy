@@ -2170,7 +2170,7 @@ public object LegacyGunItemStackRenderer : TileEntityItemStackRenderer() {
             
             val clipName = mapClipTypeToAnimName(runtimeSnapshot.clip)
             
-            val clipStartBaseMillis = runtimeSnapshot.lastUpdatedAtMillis - runtimeSnapshot.elapsedMillis
+            val clipStartBaseMillis = runtimeSnapshot.clipStartedAtMillis
             val clipRestarted = state.lastClipType == runtimeSnapshot.clip && (kotlin.math.abs(clipStartBaseMillis - state.lastClipStartBaseMillis) > 50L)
             state.lastClipType = runtimeSnapshot.clip
             state.lastClipStartBaseMillis = clipStartBaseMillis
