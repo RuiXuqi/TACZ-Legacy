@@ -2164,15 +2164,22 @@ public object LegacyGunItemStackRenderer : TileEntityItemStackRenderer() {
 
         val activeSession = if (actualRenderGunId == gunId) session else (animationSessions["${sessionId}_${actualRenderGunId}"] ?: session)
 
-        if (actualRenderGunId == gunId && runtimeSnapshot != null && runtimeSnapshot.gunId.trim().lowercase() == gunId.lowercase()) {
+        if (actualRenderGunId == gunId && runtimeSnapshot != null && runtimeSnapshot.gunId.trim().lowercase().substringAfter(":") == gunId.lowercase()) {
             val tracks = mutableListOf<SessionTrack>()
             tracks.add(SessionTrack("0:0", "static_idle", SessionTrackPlayMode.LOOP, 0f))
             
             val clipName = mapClipTypeToAnimName(runtimeSnapshot.clip)
+            
+            val clipStartBaseMillis = runtimeSnapshot.lastUpdatedAtMillis - runtimeSnapshot.elapsedMillis
+            val clipRestarted = state.lastClipType == runtimeSnapshot.clip && (kotlin.math.abs(clipStartBaseMillis - state.lastClipStartBaseMillis) > 50L)
+            state.lastClipType = runtimeSnapshot.clip
+            state.lastClipStartBaseMillis = clipStartBaseMillis
+            val forceRestarts = if (clipRestarted && clipName != null) setOf(clipName) else emptySet()
+            
             if (clipName != null) {
                 tracks.add(SessionTrack("1:0", clipName, SessionTrackPlayMode.PLAY_ONCE_HOLD, runtimeSnapshot.progress))
             }
-            activeSession.syncFromSnapshots(tracks)
+            activeSession.syncFromSnapshots(tracks, forceRestartNames = forceRestarts)
         }
 
         val prevRenderGunId = SoundPlayManager.currentRenderGunId
@@ -2585,7 +2592,9 @@ public object LegacyGunItemStackRenderer : TileEntityItemStackRenderer() {
         var putAwayDurationMillis: Long = -1L,
         var putAwayRenderGunId: String? = null,
         var activeLoopClipType: WeaponAnimationClipType? = null,
-        var activeLoopStartedAtMillis: Long = 0L
+        var activeLoopStartedAtMillis: Long = 0L,
+        var lastClipType: WeaponAnimationClipType? = null,
+        var lastClipStartBaseMillis: Long = 0L
     )
 
     private data class AnimationSoundPlaybackState(
@@ -3434,7 +3443,7 @@ public object LegacyGunItemStackRenderer : TileEntityItemStackRenderer() {
     private const val MOVEMENT_INPUT_EPSILON: Float = 0.01f
 
 
-    private fun lerp(fraction: Float, start: Float, end: Float): Float {
+    private fun lerp(start: Float, end: Float, fraction: Float): Float {
         return start + fraction * (end - start)
     }
 
@@ -3457,9 +3466,9 @@ public object LegacyGunItemStackRenderer : TileEntityItemStackRenderer() {
     }
     private fun lerp(vec1: LegacyVec3, vec2: LegacyVec3, fraction: Float): LegacyVec3 {
         return LegacyVec3(
-            lerp(fraction, vec1.x, vec2.x),
-            lerp(fraction, vec1.y, vec2.y),
-            lerp(fraction, vec1.z, vec2.z)
+            lerp(vec1.x, vec2.x, fraction),
+            lerp(vec1.y, vec2.y, fraction),
+            lerp(vec1.z, vec2.z, fraction)
         )
     }
 }
