@@ -1,7 +1,7 @@
 {
   "variants": {
-    "": {
-      "model": "tacz:block/statue"
+    "normal": {
+      "model": "tacz:statue"
     }
   }
 }

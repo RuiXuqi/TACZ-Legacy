@@ -1,7 +1,7 @@
 {
   "variants": {
-    "": {
-      "model": "tacz:block/gun_smith_table"
+    "normal": {
+      "model": "tacz:gun_smith_table"
     }
   }
 }

@@ -40,6 +40,19 @@
 
 > 若修改了 `gradle.properties` 中的 `use_mixins/use_coremod/use_access_transformer` 等开关，建议重新执行 setup 并刷新 Gradle。
 
+### 自动化烟雾测试
+
+- 纯编译检查：`./gradlew classes`
+- 客户端加载烟测：`bash scripts/runclient_smoke.sh`
+- 自定义超时（秒）：`bash scripts/runclient_smoke.sh 120`
+
+该脚本会将日志输出到 `build/smoke-tests/`，并在以下任一条件满足时判定通过：
+
+- `runClient` 正常完整退出并出现 `BUILD SUCCESSFUL`
+- 在超时前已到达模组加载/本地联机连接等烟测标记
+
+这适合做“能否成功启动到真实 MC 环境”的回归验证；若要验证具体玩法链路（射击、换弹、工作台等），建议在此基础上继续补更细的交互脚本或集成测试。
+
 ---
 
 ## 文档导航

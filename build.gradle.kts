@@ -148,6 +148,8 @@ dependencies {
         exclude("net.minecraftforge")
     }
     implementation("org.luaj:luaj-jse:3.0.1")
+    implementation("org.joml:joml:1.10.5")
+    implementation("org.apache.commons:commons-math3:3.6.1")
     testImplementation("junit:junit:4.13.2")
     
     if (use_assetmover.toBoolean()) {
