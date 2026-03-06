@@ -4,10 +4,15 @@ import com.google.gson.GsonBuilder
 import com.google.gson.stream.JsonReader
 import com.tacz.legacy.TACZLegacy
 import com.tacz.legacy.client.model.bedrock.BedrockModel
+import com.tacz.legacy.client.resource.pojo.animation.bedrock.AnimationKeyframes
+import com.tacz.legacy.client.resource.pojo.animation.bedrock.BedrockAnimationFile
+import com.tacz.legacy.client.resource.pojo.animation.bedrock.SoundEffectKeyframes
 import com.tacz.legacy.client.resource.pojo.display.gun.GunDisplay
 import com.tacz.legacy.client.resource.pojo.model.BedrockModelPOJO
 import com.tacz.legacy.client.resource.pojo.model.BedrockVersion
 import com.tacz.legacy.client.resource.pojo.model.CubesItem
+import com.tacz.legacy.client.resource.serialize.AnimationKeyframesSerializer
+import com.tacz.legacy.client.resource.serialize.SoundEffectKeyframesSerializer
 import com.tacz.legacy.client.resource.serialize.Vector3fSerializer
 import com.tacz.legacy.common.resource.TACZDisplayDefinition
 import com.tacz.legacy.common.resource.TACZLoadedPack
@@ -48,6 +53,11 @@ internal object TACZClientAssetManager {
         .registerTypeAdapter(org.joml.Vector3f::class.java, Vector3fSerializer())
         .create()
 
+    private val ANIMATION_GSON = GsonBuilder()
+        .registerTypeAdapter(AnimationKeyframes::class.java, AnimationKeyframesSerializer())
+        .registerTypeAdapter(SoundEffectKeyframes::class.java, SoundEffectKeyframesSerializer())
+        .create()
+
     /** Parsed gun display data keyed by display ResourceLocation. */
     private val gunDisplays = LinkedHashMap<ResourceLocation, GunDisplay>()
 
@@ -57,9 +67,13 @@ internal object TACZClientAssetManager {
     /** Texture ResourceLocations registered with the TextureManager, keyed by pack texture path. */
     private val textures = LinkedHashMap<ResourceLocation, ResourceLocation>()
 
+    /** Parsed bedrock animation files keyed by animation ResourceLocation. */
+    private val animations = LinkedHashMap<ResourceLocation, BedrockAnimationFile>()
+
     fun getGunDisplay(id: ResourceLocation): GunDisplay? = gunDisplays[id]
     fun getModel(id: ResourceLocation): BedrockModel? = models[id]
     fun getTextureLocation(id: ResourceLocation): ResourceLocation? = textures[id]
+    fun getAnimationFile(id: ResourceLocation): BedrockAnimationFile? = animations[id]
 
     /**
      * Reload all client assets from the [snapshot].
@@ -69,23 +83,25 @@ internal object TACZClientAssetManager {
         clear()
         parseDisplayDefinitions(snapshot.gunDisplays)
 
-        // Collect all model and texture ResourceLocations referenced by parsed displays
+        // Collect all model, texture, and animation ResourceLocations referenced by parsed displays
         val neededModels = LinkedHashSet<ResourceLocation>()
         val neededTextures = LinkedHashSet<ResourceLocation>()
+        val neededAnimations = LinkedHashSet<ResourceLocation>()
         for (display in gunDisplays.values) {
             display.modelLocation?.let(neededModels::add)
             display.modelTexture?.let(neededTextures::add)
             display.gunLod?.modelLocation?.let(neededModels::add)
             display.gunLod?.modelTexture?.let(neededTextures::add)
+            display.animationLocation?.let(neededAnimations::add)
         }
 
         // Load assets from each pack
         for (pack in snapshot.packs.values) {
-            loadAssetsFromPack(pack.sourceFile, neededModels, neededTextures)
+            loadAssetsFromPack(pack.sourceFile, neededModels, neededTextures, neededAnimations)
         }
 
-        TACZLegacy.logger.info(MARKER, "Client assets reloaded: {} displays, {} models, {} textures",
-            gunDisplays.size, models.size, textures.size)
+        TACZLegacy.logger.info(MARKER, "Client assets reloaded: {} displays, {} models, {} textures, {} animations",
+            gunDisplays.size, models.size, textures.size, animations.size)
     }
 
     fun clear() {
@@ -97,6 +113,7 @@ internal object TACZClientAssetManager {
         gunDisplays.clear()
         models.clear()
         textures.clear()
+        animations.clear()
     }
 
     private fun parseDisplayDefinitions(rawDisplays: Map<ResourceLocation, TACZDisplayDefinition>) {
@@ -115,13 +132,14 @@ internal object TACZClientAssetManager {
         packFile: File,
         neededModels: Set<ResourceLocation>,
         neededTextures: Set<ResourceLocation>,
+        neededAnimations: Set<ResourceLocation>,
     ) {
         if (!packFile.exists()) return
 
         if (packFile.isDirectory) {
-            loadFromDirectory(packFile, neededModels, neededTextures)
+            loadFromDirectory(packFile, neededModels, neededTextures, neededAnimations)
         } else if (packFile.name.endsWith(".zip", ignoreCase = true)) {
-            loadFromZip(packFile, neededModels, neededTextures)
+            loadFromZip(packFile, neededModels, neededTextures, neededAnimations)
         }
     }
 
@@ -131,6 +149,7 @@ internal object TACZClientAssetManager {
         file: File,
         neededModels: Set<ResourceLocation>,
         neededTextures: Set<ResourceLocation>,
+        neededAnimations: Set<ResourceLocation>,
     ) {
         try {
             ZipFile(file).use { zip ->
@@ -158,6 +177,17 @@ internal object TACZClientAssetManager {
                         TACZLegacy.logger.warn(MARKER, "Failed to load texture {} from {}", texLoc, file.name, e)
                     }
                 }
+                for (animLoc in neededAnimations) {
+                    if (animations.containsKey(animLoc)) continue
+                    val entryPath = "assets/${animLoc.namespace}/animations/${animLoc.path}.animation.json"
+                    val entry = zip.getEntry(entryPath) ?: continue
+                    try {
+                        val json = zip.getInputStream(entry).bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
+                        loadAnimationFromJson(animLoc, json)
+                    } catch (e: Exception) {
+                        TACZLegacy.logger.warn(MARKER, "Failed to load animation {} from {}", animLoc, file.name, e)
+                    }
+                }
             }
         } catch (e: Exception) {
             TACZLegacy.logger.warn(MARKER, "Failed to open pack zip: {}", file.name, e)
@@ -170,6 +200,7 @@ internal object TACZClientAssetManager {
         root: File,
         neededModels: Set<ResourceLocation>,
         neededTextures: Set<ResourceLocation>,
+        neededAnimations: Set<ResourceLocation>,
     ) {
         for (modelLoc in neededModels) {
             if (models.containsKey(modelLoc)) continue
@@ -192,6 +223,17 @@ internal object TACZClientAssetManager {
                 }
             } catch (e: Exception) {
                 TACZLegacy.logger.warn(MARKER, "Failed to load texture {} from dir {}", texLoc, root.name, e)
+            }
+        }
+        for (animLoc in neededAnimations) {
+            if (animations.containsKey(animLoc)) continue
+            val filePath = root.toPath().resolve("assets/${animLoc.namespace}/animations/${animLoc.path}.animation.json")
+            if (!Files.isRegularFile(filePath)) continue
+            try {
+                val json = Files.newBufferedReader(filePath, StandardCharsets.UTF_8).use { it.readText() }
+                loadAnimationFromJson(animLoc, json)
+            } catch (e: Exception) {
+                TACZLegacy.logger.warn(MARKER, "Failed to load animation {} from dir {}", animLoc, root.name, e)
             }
         }
     }
@@ -221,5 +263,18 @@ internal object TACZClientAssetManager {
         // Register with a unique location under tacz_dynamic namespace to avoid collision
         val registeredLoc = textureManager.getDynamicTextureLocation("tacz_pack", dynamicTexture)
         textures[id] = registeredLoc
+    }
+
+    // ------ Animation parsing ------
+
+    private fun loadAnimationFromJson(id: ResourceLocation, json: String) {
+        val reader = JsonReader(StringReader(json))
+        reader.isLenient = true
+        val animFile = ANIMATION_GSON.fromJson<BedrockAnimationFile>(reader, BedrockAnimationFile::class.java)
+        if (animFile?.animations == null || animFile.animations.isEmpty()) {
+            TACZLegacy.logger.warn(MARKER, "Animation file has no animations: {}", id)
+            return
+        }
+        animations[id] = animFile
     }
 }

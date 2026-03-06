@@ -298,4 +298,27 @@ public class BedrockModel {
     public HashMap<String, ModelRendererWrapper> getModelMap() {
         return modelMap;
     }
+
+    /**
+     * Get the path from root to the given node (inclusive).
+     * Returns null if the wrapper is null.
+     */
+    @Nullable
+    protected List<BedrockPart> getPath(@Nullable ModelRendererWrapper rendererWrapper) {
+        if (rendererWrapper == null) {
+            return null;
+        }
+        BedrockPart part = rendererWrapper.getModelRenderer();
+        List<BedrockPart> path = new ArrayList<>();
+        Stack<BedrockPart> stack = new Stack<>();
+        do {
+            stack.push(part);
+            part = part.getParent();
+        } while (part != null);
+        while (!stack.isEmpty()) {
+            part = stack.pop();
+            path.add(part);
+        }
+        return path;
+    }
 }
