@@ -131,13 +131,20 @@
   - runtime 翻译 / display / recipe filter / workbench 摘要 / attachment tag 的真实客户端消费入口；
   - `GunEvents`、输入桥、overlay、tooltip bridge、`TACZGunPackPresentation` 等客户端桥接层；
   - `GunSmithTableScreen`、`LegacyGuiHandler`、`GunSmithTableContainer`、`ClientMessageGunSmithCraft`、`LegacyGunSmithingRuntime` 组成的 `1.12.2` 工匠台基础 GUI-container-craft 流；
-  - `IAttachment`、`AttachmentType`、扩展后的 `IGun` 与相关物品接线，足以支撑 `gun result` 预装附件与 by-hand filter 这轮行为。
-- **验证状态**：编译与定向测试已覆盖上述 Client UX / gunsmith runtime 变更；真实 `runClient` 手工 smoke 仍会被外部环境问题阻断——Forge 1.12 对多版本 Kotlin jar 的 ASM 扫描会在模组初始化前失败，因此当前需要把这类阻塞明确记录为**环境问题**，而不是把它误记为本轮迁移失败。
+   - `IAttachment`、`AttachmentType`、扩展后的 `IGun` 与相关物品接线，足以支撑 `gun result` 预装附件与 by-hand filter 这轮行为；
+   - 与 `GunRefitScreen` 真值直接相关的一轮 backend/accessor 补齐也已落地：`IGun` / `IAttachment` 已补 builtin attachment、aim zoom、zoom number、laser color 访问语义，`LegacyItems.AttachmentItem` 与 `LegacyItems.ModernKineticGunItem` 已按上游 NBT / runtime snapshot 读写这些值，`TACZGunPackPresentation` 已新增 builtin attachment / iron zoom / attachment zoom / laser config 解析 helper，并已有 `RefitAttachmentAccessorParityTest` 做定向回归。
+- **渲染 / 动画 / 客户端资源**：本阶段已完成 bedrock model/render 基础设施的大块迁移，已落地内容包括：
+   - `client/resource/pojo/model/**`、`client/resource/pojo/display/gun/**`、`client/resource/serialize/Vector3fSerializer.java` 等资源 POJO / 序列化层；
+   - `client/model/bedrock/**` 下的 Bedrock geometry 渲染结构；
+   - `client/resource/TACZClientAssetManager.kt` 与 `client/renderer/item/TACZGunItemRenderer.kt`，以及 `ClientProxy.kt` 中的 item 渲染接线；
+   - `BedrockModelParsingTest`、`GunDisplayParsingTest` 等解析回归测试；
+   - 一轮成功的 `runClient` smoke，已确认客户端能够从 gun pack 成功加载 `110` 个 display、`166` 个 model、`166` 个 texture。
+- **验证状态**：编译与定向测试已覆盖 Client UX / gunsmith / refit backend / render parsing 等阶段性变更；渲染基础设施已有一轮成功的 `runClient` smoke。后续若某些 client UX / refit 手工路径再次被 Forge 1.12 对多版本 Kotlin jar 的 ASM 扫描问题挡在模组初始化前，仍应按“环境阻塞而非本轮回归”记录，不要把阶段性验证结论混成一团。
 
-因此，下一阶段最值得投入的主线通常不是“继续重迁数据/战斗/Client UX 主链”，而是：
-   1. **Render / Animation 对接**：把 runtime snapshot、gun id/item type、`ServerMessage*` 事件与客户端表现链路全面接通
-   2. **剩余 blocked 的 Client UX / Refit 能力**：例如 `GunRefitScreen`、更完整的 attachment slot 操作与 refit backend 状态接口
-   3. **第三方兼容与剩余玩法收尾**：在核心主链已成形的前提下，继续补 JEI / KubeJS / 高级玩法与表现边角
+因此，下一阶段最值得投入的主线通常不是“继续重迁数据/战斗/Client UX/Render 基础设施主链”，而是：
+    1. **Render 剩余子轨**：animation state machine、关键帧插值、bone animation application、ammo/attachment display renderer、muzzle flash / shell ejection、第一人称 hand/scope 渲染链路
+    2. **剩余 blocked 的 Client UX / Refit 能力**：例如 `GunRefitScreen` 本体、安装/卸下/laser 提交消息、screen refresh 回包、附件属性刷新与副作用链
+    3. **第三方兼容与剩余玩法收尾**：在核心主链已成形的前提下，继续补 JEI / KubeJS / 高级玩法与表现边角
 
 补充规则：
 
@@ -152,8 +159,8 @@
 | 基础启动与注册 | `.github/prompts/tacz-migrate-foundation.prompt.md` | `TACZ Migration` | 迁移入口、配置、注册、底座 |
 | 数据/枪包兼容 | `.github/prompts/tacz-migrate-data-pack.prompt.md` | `TACZ Migration` | 在已落地 runtime/parser 基础上继续做资源消费、兼容补齐与玩法接线 |
 | 战斗/实体/网络 | `.github/prompts/tacz-migrate-combat-network.prompt.md` | `TACZ Migration` | 在已落地 shooter/network 主链基础上继续做 parity 补齐、客户端消费与表现接线 |
-| 客户端交互/UI | `.github/prompts/tacz-migrate-client-ux.prompt.md` | `TACZ Migration` | 在已落地输入/HUD/tooltip/`gun_smith_table` 基础 GUI-container-craft 链路上继续做回归修复、剩余 parity 与 blocked backend 收尾 |
-| 渲染/动画/客户端资源 | `.github/prompts/tacz-migrate-render-animation.prompt.md` | `TACZ Migration` | 在已落地 runtime、network、Client UX 桥接基础上继续把渲染、动画、模型、scope 与客户端表现链路接通 |
+| 客户端交互/UI | `.github/prompts/tacz-migrate-client-ux.prompt.md` | `TACZ Migration` | 在已落地输入/HUD/tooltip/`gun_smith_table` 与 refit accessor/backend 真值基础上继续做回归修复、剩余 parity 与 blocked backend 收尾 |
+| 渲染/动画/客户端资源 | `.github/prompts/tacz-migrate-render-animation.prompt.md` | `TACZ Migration` | 在已落地 bedrock model/display/asset manager/gun item TEISR 基础上继续补动画、第一人称、scope 与特效链路 |
 | 第三方兼容 | `.github/prompts/tacz-migrate-compat.prompt.md` | `TACZ Migration` | 迁移 JEI/KubeJS/Cloth/动画器/光影等兼容 |
 
 ## 实际使用建议

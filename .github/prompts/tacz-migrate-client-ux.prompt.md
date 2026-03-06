@@ -10,8 +10,9 @@ argument-hint: "填写要迁移的客户端交互/UI 功能、上游文件或验
 
 - 这条线的**本阶段迭代已完成**。
 - 当前 `TACZ-Legacy` 已有可继续复用的客户端桥接与消费层，例如 `GunEvents.kt`、`LegacyClientInputEventHandler.kt`、`LegacyClientOverlayEventHandler.kt`、`LegacyClientPlayerGunBridge.kt`、`LegacyKeyBindings.kt`、`LegacyRuntimeTooltipSupport.kt`、`TACZGunPackPresentation.kt`，以及本轮新落地的 `GunSmithTableScreen.kt`、`LegacyGuiHandler.kt`、`LegacyGuiIds.kt`、`GunSmithTableContainer.kt`、`ClientMessageGunSmithCraft.kt`、`common/application/gunsmith/LegacyGunSmithingRuntime.kt`。
+- 这条线又补上了一轮 **refit backend 真值 / accessor 真值**：`IGun.kt` 与 `IAttachment.kt` 已补齐 builtin attachment、aim zoom、zoom number、laser color 等访问语义；`LegacyItems.AttachmentItem` 与 `LegacyItems.ModernKineticGunItem` 会按上游 NBT / runtime snapshot 读写 `ZoomNumber`、`LaserColor`、builtin attachment；`TACZGunPackPresentation.kt` 也已提供 `resolveBuiltinAttachmentId(...)`、`resolveGunIronZoom(...)`、`resolveAttachmentZoomLevels(...)`、`resolveAttachmentLaserConfig(...)` 供后续 screen / tooltip / HUD 复用，并已有 `RefitAttachmentAccessorParityTest.kt` 做定向回归。
 - 这意味着 tooltip / HUD / overlay / 输入桥接 / `gun_smith_table` 基础 GUI-container-craft 流已经不再是空白区；现在使用这个 Prompt 时，默认应视为**回归修复 / 剩余 parity 补齐 / 新客户端消费点接入 / 被 backend 阻塞的后续屏幕收尾**。
-- 当前已知仍未 truthfully 完成的重点不在 `gun_smith_table` 基础链路，而在 `GunRefitScreen` 等依赖更完整 refit backend 与附件槽位状态接口的后续能力。
+- 当前已知仍未 truthfully 完成的重点不在 `gun_smith_table` 基础链路，而在 `GunRefitScreen` 本体、安装/卸下/laser 提交的真实消息与服务端处理、screen refresh 回包、附件变更后的属性/副作用刷新链路等依赖更完整 refit backend 的后续能力。
 
 默认关注范围：
 
@@ -33,9 +34,10 @@ argument-hint: "填写要迁移的客户端交互/UI 功能、上游文件或验
 
 - 优先消费已经落地的数据与战斗基座：`TACZGunPackRuntimeRegistry.getSnapshot()` / `TACZRuntimeSnapshot`、`LegacyItems`、`IGun.getGunId()`、`IGunOperator`、`ShooterDataHolder`、`TACZNetworkHandler`
 - 当前阶段不要重新发明 gun display cache、gun id 解析、本地 shooter 状态缓存、runtime 翻译解析或 presentation bridge；优先复用 `TACZGunPackPresentation`、`LegacyRuntimeTooltipSupport`、`GunEvents`、`LegacyClientPlayerGunBridge`
+- 若涉及 scope / builtin attachment / laser color 的 UI、tooltip、HUD 或 refit 预览，请优先消费 `TACZGunPackPresentation` 的 `resolveBuiltinAttachmentId(...)`、`resolveGunIronZoom(...)`、`resolveAttachmentZoomLevels(...)`、`resolveAttachmentLaserConfig(...)` 与 `IGun` / `IAttachment` 的现有 accessor 语义，不要平行维护第二套客户端 display / NBT 镜像
 - 若涉及网络事件表现，优先消费现有 `common/network/message/event/**` 与 `api/event/GunEvents.kt`，不要平行新增第二套 UI 专用消息协议
 - `gun_smith_table` 的基础 GUI / container / craft 流已经落地；后续若继续修改，默认应以回归修复、parity 补齐、筛选/预览细节增强或结果展示校正为目标
-- 若任务转向 `GunRefitScreen`、附件槽位操作、laser color / scope zoom / refit transform 等能力，请明确同步检查 `IGun` / `IAttachment` / attachment type / item NBT / server refit backend 是否已具备足够真值接口；若没有，应先把任务定性为 blocked backend 收尾，而不是硬拼假 UI
+- 若任务转向 `GunRefitScreen`、附件槽位操作、laser color / scope zoom / refit transform 等能力，请明确同步检查 `IGun` / `IAttachment` / attachment type / item NBT / server refit backend 是否已具备足够真值接口；当前 accessor / NBT 真值已补了一轮，但 screen、本地交互提交消息与刷新回包仍可能是 blocked backend 收尾，不能硬拼假 UI
 - 运行链路验证若被已知的 Forge 1.12 + 多版本 Kotlin jar 的 ASM 扫描问题挡在模组初始化前，可接受用“编译 + 定向测试 + 说明阻塞点”的方式收口，但必须明确这不是本次改动引入的新问题
 
 通用补充要求：
@@ -53,5 +55,6 @@ argument-hint: "填写要迁移的客户端交互/UI 功能、上游文件或验
 - 测试结果
 - 运行链路验证结果（输入触发、UI 更新、Tooltip/HUD 实时性）
 - 明确说明这次接入或复用了哪些现成 client UX bridge / presentation / event 入口
+- 若任务涉及 refit / attachment accessor / zoom / laser color，必须明确说明验证了哪些真实 NBT/accessor 语义，以及哪些 UI 交互仍因 blocked backend 尚未落地
 - 若运行时 smoke 仍被外部 ASM / 依赖问题阻断，必须明确记录阻塞点、已完成的替代验证，以及哪些链路仍待真实客户端手验
 - 任何不可避免的行为差异

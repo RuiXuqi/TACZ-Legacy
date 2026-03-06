@@ -13,7 +13,17 @@ public interface IAttachment {
 
     public fun setAttachmentId(stack: ItemStack, attachmentId: ResourceLocation?)
 
+    public fun getZoomNumber(stack: ItemStack): Int
+
+    public fun setZoomNumber(stack: ItemStack, zoomNumber: Int)
+
     public fun getType(stack: ItemStack): AttachmentType
+
+    public fun hasCustomLaserColor(stack: ItemStack): Boolean
+
+    public fun getLaserColor(stack: ItemStack): Int
+
+    public fun setLaserColor(stack: ItemStack, color: Int)
 
     public companion object {
         @JvmStatic

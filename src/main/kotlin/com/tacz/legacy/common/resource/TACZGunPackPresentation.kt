@@ -1,8 +1,17 @@
 package com.tacz.legacy.common.resource
 
+import com.google.gson.JsonObject
+import com.tacz.legacy.api.item.attachment.AttachmentType
 import net.minecraft.util.ResourceLocation
 import java.util.LinkedHashSet
 import java.util.Locale
+
+internal data class TACZAttachmentLaserConfigDefinition(
+    val defaultColor: Int,
+    val canEdit: Boolean,
+    val length: Int,
+    val width: Float,
+)
 
 internal object TACZGunPackPresentation {
     fun localeCandidates(): List<String> {
@@ -117,6 +126,50 @@ internal object TACZGunPackPresentation {
         return displayId.takeIf(snapshot.attachmentDisplays::containsKey)
     }
 
+    fun resolveBuiltinAttachmentId(
+        snapshot: TACZRuntimeSnapshot,
+        gunId: ResourceLocation,
+        type: AttachmentType,
+    ): ResourceLocation? {
+        val builtin = snapshot.guns[gunId]?.data?.raw?.jsonObject("builtin_attachments") ?: return null
+        val rawId = builtin.stringValue(type.serializedName) ?: return null
+        return runCatching { ResourceLocation(rawId) }.getOrNull()
+    }
+
+    fun resolveGunIronZoom(snapshot: TACZRuntimeSnapshot, gunId: ResourceLocation): Float {
+        val displayId = resolveGunDisplayId(snapshot, gunId) ?: return 1.0f
+        return snapshot.gunDisplays[displayId]
+            ?.raw
+            ?.floatValue("iron_zoom")
+            ?.coerceAtLeast(1.0f)
+            ?: 1.0f
+    }
+
+    fun resolveAttachmentZoomLevels(snapshot: TACZRuntimeSnapshot, attachmentId: ResourceLocation): FloatArray? {
+        val displayId = resolveAttachmentDisplayId(snapshot, attachmentId) ?: return null
+        val zoomValues = snapshot.attachmentDisplays[displayId]
+            ?.raw
+            ?.getAsJsonArray("zoom")
+            ?.mapNotNull { value -> runCatching { value.asFloat.coerceAtLeast(1.0f) }.getOrNull() }
+            .orEmpty()
+        return zoomValues.takeIf(List<Float>::isNotEmpty)?.toFloatArray()
+    }
+
+    fun resolveAttachmentLaserConfig(snapshot: TACZRuntimeSnapshot, attachmentId: ResourceLocation): TACZAttachmentLaserConfigDefinition? {
+        val displayId = resolveAttachmentDisplayId(snapshot, attachmentId) ?: return null
+        val laser = snapshot.attachmentDisplays[displayId]?.raw?.jsonObject("laser") ?: return null
+        return TACZAttachmentLaserConfigDefinition(
+            defaultColor = parseLaserColor(laser.stringValue("default_color")),
+            canEdit = laser.booleanValue("can_edit", defaultValue = true),
+            length = laser.intValue("length")
+                .takeIf { it > 0 }
+                ?: 25,
+            width = laser.floatValue("width")
+                ?.takeIf { it > 0.0f }
+                ?: 0.008f,
+        )
+    }
+
     fun resolveBlockDisplayId(snapshot: TACZRuntimeSnapshot, blockId: ResourceLocation): ResourceLocation? {
         val displayId = snapshot.blocks[blockId]?.index?.display ?: return null
         return displayId.takeIf(snapshot.blockDisplays::containsKey)
@@ -215,5 +268,29 @@ internal object TACZGunPackPresentation {
 
     private fun normalizeLocale(locale: String): String = locale.lowercase(Locale.ROOT).replace('-', '_')
 
+    private fun parseLaserColor(rawValue: String?): Int {
+        val normalized = rawValue?.trim().orEmpty()
+        if (normalized.isBlank()) {
+            return DEFAULT_LASER_COLOR
+        }
+        return runCatching { Integer.decode(normalized) }.getOrDefault(DEFAULT_LASER_COLOR)
+    }
+
     private const val TAG_PREFIX: String = "#"
+    private const val DEFAULT_LASER_COLOR: Int = 0xFF0000
 }
+
+private fun JsonObject.jsonObject(key: String): JsonObject? =
+    get(key)?.takeIf { it.isJsonObject }?.asJsonObject
+
+private fun JsonObject.stringValue(key: String): String? =
+    get(key)?.takeIf { !it.isJsonNull }?.asString?.trim()?.takeIf(String::isNotBlank)
+
+private fun JsonObject.floatValue(key: String): Float? =
+    get(key)?.takeIf { !it.isJsonNull }?.asFloat
+
+private fun JsonObject.booleanValue(key: String, defaultValue: Boolean): Boolean =
+    get(key)?.takeIf { !it.isJsonNull }?.asBoolean ?: defaultValue
+
+private fun JsonObject.intValue(key: String): Int =
+    get(key)?.takeIf { !it.isJsonNull }?.asInt ?: 0

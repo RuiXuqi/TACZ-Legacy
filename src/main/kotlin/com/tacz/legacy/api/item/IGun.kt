@@ -15,6 +15,8 @@ public interface IGun {
     public fun getGunId(stack: ItemStack): ResourceLocation
     public fun setGunId(stack: ItemStack, gunId: ResourceLocation?)
 
+    public fun getAimingZoom(stack: ItemStack): Float
+
     public fun getFireMode(stack: ItemStack): FireMode
     public fun setFireMode(stack: ItemStack, fireMode: FireMode?)
 
@@ -35,11 +37,17 @@ public interface IGun {
 
     public fun getAttachmentTag(stack: ItemStack, type: AttachmentType): NBTTagCompound?
     public fun getAttachment(stack: ItemStack, type: AttachmentType): ItemStack
+    public fun getBuiltinAttachment(stack: ItemStack, type: AttachmentType): ItemStack
     public fun getAttachmentId(stack: ItemStack, type: AttachmentType): ResourceLocation
+    public fun getBuiltInAttachmentId(stack: ItemStack, type: AttachmentType): ResourceLocation
     public fun installAttachment(gun: ItemStack, attachment: ItemStack)
     public fun unloadAttachment(gun: ItemStack, type: AttachmentType)
     public fun allowAttachment(gun: ItemStack, attachmentItem: ItemStack): Boolean
     public fun allowAttachmentType(gun: ItemStack, type: AttachmentType): Boolean
+
+    public fun hasCustomLaserColor(stack: ItemStack): Boolean
+    public fun getLaserColor(stack: ItemStack): Int
+    public fun setLaserColor(stack: ItemStack, color: Int)
 
     public fun hasAttachmentLock(stack: ItemStack): Boolean
     public fun setAttachmentLock(stack: ItemStack, locked: Boolean)
@@ -55,6 +63,7 @@ public interface IGun {
         public const val FIRE_MODE_TAG: String = "GunFireMode"
         public const val AMMO_COUNT_TAG: String = "GunCurrentAmmoCount"
         public const val BULLET_IN_BARREL_TAG: String = "HasBulletInBarrel"
+        public const val LASER_COLOR_TAG: String = "LaserColor"
         public const val OVERHEAT_LOCK_TAG: String = "OverHeated"
 
         @JvmStatic

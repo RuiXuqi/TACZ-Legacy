@@ -208,11 +208,34 @@ internal class AttachmentItem : Item(), IAttachment {
         ensureTag(stack).setString(ATTACHMENT_ID_TAG, attachmentId.toString())
     }
 
+    override fun getZoomNumber(stack: ItemStack): Int {
+        return stack.tagCompound?.getInteger(ZOOM_NUMBER_TAG) ?: 0
+    }
+
+    override fun setZoomNumber(stack: ItemStack, zoomNumber: Int) {
+        ensureTag(stack).setInteger(ZOOM_NUMBER_TAG, zoomNumber)
+    }
+
     override fun getType(stack: ItemStack): AttachmentType {
         val snapshot = TACZGunPackRuntimeRegistry.getSnapshot()
         val attachmentId = getAttachmentId(stack)
         val rawType = snapshot.attachments[attachmentId]?.index?.type
         return AttachmentType.fromSerializedName(rawType)
+    }
+
+    override fun hasCustomLaserColor(stack: ItemStack): Boolean {
+        return stack.tagCompound?.hasKey(LASER_COLOR_TAG, NbtType.INT) ?: false
+    }
+
+    override fun getLaserColor(stack: ItemStack): Int {
+        if (!hasCustomLaserColor(stack)) {
+            return DEFAULT_LASER_COLOR
+        }
+        return stack.tagCompound?.getInteger(LASER_COLOR_TAG) ?: DEFAULT_LASER_COLOR
+    }
+
+    override fun setLaserColor(stack: ItemStack, color: Int) {
+        ensureTag(stack).setInteger(LASER_COLOR_TAG, color)
     }
 
     override fun getItemStackDisplayName(stack: ItemStack): String {
@@ -242,6 +265,9 @@ internal class AttachmentItem : Item(), IAttachment {
 
     internal companion object {
         internal const val ATTACHMENT_ID_TAG: String = "AttachmentId"
+        internal const val ZOOM_NUMBER_TAG: String = "ZoomNumber"
+        internal const val LASER_COLOR_TAG: String = "LaserColor"
+        private const val DEFAULT_LASER_COLOR: Int = 0xFF0000
     }
 }
 
@@ -356,6 +382,31 @@ internal class ModernKineticGunItem : Item(), IGun {
         if (gunId != null) {
             ensureTag(stack).setString(IGun.GUN_ID_TAG, gunId.toString())
         }
+    }
+
+    override fun getAimingZoom(stack: ItemStack): Float {
+        val snapshot = TACZGunPackRuntimeRegistry.getSnapshot()
+        var zoom = 1.0f
+        var scopeId = getAttachmentId(stack, AttachmentType.SCOPE)
+        var builtinScope = false
+        if (scopeId == DefaultAssets.EMPTY_ATTACHMENT_ID) {
+            scopeId = getBuiltInAttachmentId(stack, AttachmentType.SCOPE)
+            builtinScope = true
+        }
+        if (scopeId != DefaultAssets.EMPTY_ATTACHMENT_ID) {
+            val zoomLevels = TACZGunPackPresentation.resolveAttachmentZoomLevels(snapshot, scopeId)
+            if (zoomLevels != null && zoomLevels.isNotEmpty()) {
+                val zoomNumber = if (builtinScope) {
+                    0
+                } else {
+                    getAttachmentTag(stack, AttachmentType.SCOPE)?.getInteger(AttachmentItem.ZOOM_NUMBER_TAG) ?: 0
+                }
+                zoom = zoomLevels[Math.floorMod(zoomNumber, zoomLevels.size)]
+            }
+        } else {
+            zoom = TACZGunPackPresentation.resolveGunIronZoom(snapshot, getGunId(stack))
+        }
+        return zoom.coerceAtLeast(1.0f)
     }
 
     override fun getFireMode(stack: ItemStack): FireMode {
@@ -492,10 +543,29 @@ internal class ModernKineticGunItem : Item(), IGun {
         return ItemStack(root.getCompoundTag(key))
     }
 
+    override fun getBuiltinAttachment(stack: ItemStack, type: AttachmentType): ItemStack {
+        val attachmentId = getBuiltInAttachmentId(stack, type)
+        if (attachmentId == DefaultAssets.EMPTY_ATTACHMENT_ID) {
+            return ItemStack.EMPTY
+        }
+        return ItemStack(LegacyItems.ATTACHMENT).apply {
+            LegacyItems.ATTACHMENT.setAttachmentId(this, attachmentId)
+        }
+    }
+
     override fun getAttachmentId(stack: ItemStack, type: AttachmentType): ResourceLocation {
         val tag = getAttachmentTag(stack, type) ?: return DefaultAssets.EMPTY_ATTACHMENT_ID
         val value = tag.getString(AttachmentItem.ATTACHMENT_ID_TAG)
         return value.takeIf(String::isNotBlank)?.let(::ResourceLocation) ?: DefaultAssets.EMPTY_ATTACHMENT_ID
+    }
+
+    override fun getBuiltInAttachmentId(stack: ItemStack, type: AttachmentType): ResourceLocation {
+        if (type == AttachmentType.NONE) {
+            return DefaultAssets.EMPTY_ATTACHMENT_ID
+        }
+        val snapshot = TACZGunPackRuntimeRegistry.getSnapshot()
+        return TACZGunPackPresentation.resolveBuiltinAttachmentId(snapshot, getGunId(stack), type)
+            ?: DefaultAssets.EMPTY_ATTACHMENT_ID
     }
 
     override fun installAttachment(gun: ItemStack, attachment: ItemStack) {
@@ -511,7 +581,7 @@ internal class ModernKineticGunItem : Item(), IGun {
         if (!allowAttachmentType(gun, type)) {
             return
         }
-        ensureTag(gun).removeTag(attachmentKey(type))
+        ensureTag(gun).setTag(attachmentKey(type), ItemStack.EMPTY.writeToNBT(NBTTagCompound()))
     }
 
     override fun allowAttachment(gun: ItemStack, attachmentItem: ItemStack): Boolean {
@@ -527,6 +597,21 @@ internal class ModernKineticGunItem : Item(), IGun {
         val gunId = getGunId(gun)
         val gunEntry = TACZGunPackRuntimeRegistry.getSnapshot().guns[gunId] ?: return false
         return gunEntry.data.allowAttachmentTypes.any { AttachmentType.fromSerializedName(it) == type }
+    }
+
+    override fun hasCustomLaserColor(stack: ItemStack): Boolean {
+        return stack.tagCompound?.hasKey(IGun.LASER_COLOR_TAG, NbtType.INT) ?: false
+    }
+
+    override fun getLaserColor(stack: ItemStack): Int {
+        if (!hasCustomLaserColor(stack)) {
+            return DEFAULT_LASER_COLOR
+        }
+        return stack.tagCompound?.getInteger(IGun.LASER_COLOR_TAG) ?: DEFAULT_LASER_COLOR
+    }
+
+    override fun setLaserColor(stack: ItemStack, color: Int) {
+        ensureTag(stack).setInteger(IGun.LASER_COLOR_TAG, color)
     }
 
     override fun hasAttachmentLock(stack: ItemStack): Boolean {
@@ -560,6 +645,7 @@ internal class ModernKineticGunItem : Item(), IGun {
 
     internal companion object {
         internal const val TYPE_NAME: String = "modern_kinetic"
+        private const val DEFAULT_LASER_COLOR: Int = 0xFF0000
     }
 }
 
@@ -677,6 +763,7 @@ private fun attachmentKey(type: AttachmentType): String = "${IGun.ATTACHMENT_BAS
 
 private object NbtType {
     const val COMPOUND: Int = 10
+    const val INT: Int = 3
 }
 
 @SideOnly(Side.CLIENT)

@@ -8,7 +8,10 @@ argument-hint: "填写要迁移的渲染/动画功能、上游文件或验收约
 
 当前阶段说明：
 
-- 数据/枪包兼容、战斗/网络、Client UX 的本阶段迭代已完成；渲染/动画侧现在可以默认消费现成 runtime snapshot、gun id/item type 解析、`ServerMessage*` 事件来源、客户端桥接入口，以及已落地的 `gun_smith_table` 基础 GUI/container/craft 链路。
+- 数据/枪包兼容、战斗/网络、Client UX 的本阶段迭代已完成；此外，渲染侧的 **Bedrock model / gun display / client asset manager / gun item TEISR 基础设施** 也已完成一轮大迁移。当前 `TACZ-Legacy` 已有可继续复用的基座：`client/resource/pojo/model/**`、`client/resource/pojo/display/gun/**`、`client/resource/serialize/Vector3fSerializer.java`、`client/model/bedrock/**`、`client/resource/TACZClientAssetManager.kt`、`client/renderer/item/TACZGunItemRenderer.kt`，以及 `ClientProxy.kt` 中的接线。
+- 当前 render 线默认应建立在这些已落地基座之上：若任务只是基础 display 解析、基础模型装载、纹理解析、item renderer 骨架或 Bedrock cube/part/model 结构接线，应优先归类为**回归 / parity 缺口 / 剩余增强**，而不是重新从零实现渲染底座。
+- 当前已存在的验证基线包括 `BedrockModelParsingTest.kt`、`GunDisplayParsingTest.kt`，并且已有一轮 `runClient` smoke 验证 `TACZClientAssetManager` 能从 gun pack 成功加载 `110` 个 display、`166` 个 model、`166` 个 texture。
+- 当前 render 线剩余重点已收敛到：动画状态机 / 关键帧插值 / bone animation application、ammo/attachment display POJO 与 renderer、muzzle flash / shell ejection、第一人称 hand/scope 渲染链路，以及这些表现层与现有 `ServerMessage*` 事件 / shooter 状态 / runtime snapshot 的继续接线。
 - 若任务主要是 HUD / tooltip / 输入桥接 / `gun_smith_table` 基础 GUI-container-craft 流，优先改用 `client ux` Prompt，而不是把屏幕/交互问题都塞进渲染 Prompt。
 - 若任务涉及 scope 视觉、第一/第三人称动作、枪械 display、动画采样、客户端特效或与 `ServerMessage*` 事件绑定的表现层反馈，则应优先归到本 Prompt。
 
@@ -33,6 +36,8 @@ argument-hint: "填写要迁移的渲染/动画功能、上游文件或验收约
 
 - 优先消费已经落地的数据与战斗基座：`TACZGunPackRuntimeRegistry.getSnapshot()` / `TACZRuntimeSnapshot`、`LegacyItems` 的 item type 注册、`IGun.getGunId()`、`TACZNetworkHandler` 与现有 shooter/network 状态
 - 不要重做 display / gun id / item type 的平行缓存；优先把渲染、模型、动画和客户端资源链路接到现有 runtime snapshot 与枪械 item 消费路径上
+- 优先复用 `TACZClientAssetManager`、`client/resource/pojo/**`、`client/model/bedrock/**` 与 `TACZGunItemRenderer` 的现有资产加载 / 模型构建 / item 渲染基座，不要并行再造第二套 bedrock/display cache
+- 若涉及 scope / attachment / refit 的表现层，请同步消费 `TACZGunPackPresentation` 已有的 builtin attachment / zoom / laser config helper，与 `IGun` / `IAttachment` 的 accessor 真值保持一致
 - 若涉及射击 / 换弹 / 近战的客户端表现，优先消费现有 `common/network/message/event/**` 事件消息并与渲染/音效系统接线
 
 通用补充要求：
@@ -49,4 +54,5 @@ argument-hint: "填写要迁移的渲染/动画功能、上游文件或验收约
 - Legacy 落点文件
 - 测试结果
 - 运行链路验证结果（不是 compile-only）
+- 明确说明这次复用了哪些现成 render/client resource 基座（如 POJO、bedrock model、asset manager、TEISR），以及哪些仍属于剩余 animation / first-person / 特效子轨
 - 任何必须保留的非 1:1 结构差异及原因
