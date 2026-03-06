@@ -8,6 +8,8 @@
   "mixins": [
     "LivingEntityMixin"
   ],
-  "client": [],
+  "client": [
+    "client.ItemRendererMixin"
+  ],
   "server": []
 }

@@ -3,7 +3,6 @@ package com.tacz.legacy.client.resource
 import com.google.gson.GsonBuilder
 import com.google.gson.stream.JsonReader
 import com.tacz.legacy.TACZLegacy
-import com.tacz.legacy.client.model.bedrock.BedrockModel
 import com.tacz.legacy.api.vmlib.LuaAnimationConstant
 import com.tacz.legacy.api.vmlib.LuaGunAnimationConstant
 import com.tacz.legacy.api.vmlib.LuaLibrary
@@ -95,8 +94,14 @@ internal object TACZClientAssetManager {
     /** Compiled Lua scripts keyed by script ResourceLocation. */
     private val scripts = LinkedHashMap<ResourceLocation, LuaTable>()
 
+    /** Pending script sources collected during pack loading, resolved after all packs are scanned. */
+    private val pendingScriptSources = LinkedHashMap<ResourceLocation, String>()
+
     /** Lua VM libraries injected into script globals. */
     private val luaLibraries: List<LuaLibrary> = listOf(LuaAnimationConstant(), LuaGunAnimationConstant())
+
+    /** Cached GunDisplayInstance objects, keyed by display ResourceLocation. */
+    private val gunDisplayInstances = LinkedHashMap<ResourceLocation, GunDisplayInstance>()
 
     fun getGunDisplay(id: ResourceLocation): GunDisplay? = gunDisplays[id]
     fun getAmmoDisplay(id: ResourceLocation): AmmoDisplay? = ammoDisplays[id]
@@ -106,6 +111,7 @@ internal object TACZClientAssetManager {
     fun getTextureLocation(id: ResourceLocation): ResourceLocation? = textures[id]
     fun getAnimationFile(id: ResourceLocation): BedrockAnimationFile? = animations[id]
     fun getScript(id: ResourceLocation): LuaTable? = scripts[id]
+    fun getGunDisplayInstance(displayId: ResourceLocation): GunDisplayInstance? = gunDisplayInstances[displayId]
 
     /**
      * Reload all client assets from the [snapshot].
@@ -166,11 +172,31 @@ internal object TACZClientAssetManager {
             loadAssetsFromPack(pack.sourceFile, neededModels, neededTextures, neededAnimations, neededScripts)
         }
 
+        // Resolve scripts with dependency-aware retry (scripts use require() to reference each other)
+        resolveAllScripts()
+
         val totalDisplays = gunDisplays.size + ammoDisplays.size + attachmentDisplays.size + blockDisplays.size
         TACZLegacy.logger.info(MARKER,
             "Client assets reloaded: {} displays (gun={}, ammo={}, attach={}, block={}), {} models, {} textures, {} animations, {} scripts",
             totalDisplays, gunDisplays.size, ammoDisplays.size, attachmentDisplays.size, blockDisplays.size,
             models.size, textures.size, animations.size, scripts.size)
+
+        // Build GunDisplayInstance for each gun display
+        buildGunDisplayInstances()
+    }
+
+    private fun buildGunDisplayInstances() {
+        for ((displayId, display) in gunDisplays) {
+            try {
+                val instance = GunDisplayInstance.create(display, this)
+                if (instance != null) {
+                    gunDisplayInstances[displayId] = instance
+                }
+            } catch (e: Exception) {
+                TACZLegacy.logger.warn(MARKER, "Failed to build GunDisplayInstance for {}: {}", displayId, e.message)
+            }
+        }
+        TACZLegacy.logger.info(MARKER, "Built {} gun display instances", gunDisplayInstances.size)
     }
 
     fun clear() {
@@ -187,6 +213,8 @@ internal object TACZClientAssetManager {
         textures.clear()
         animations.clear()
         scripts.clear()
+        pendingScriptSources.clear()
+        gunDisplayInstances.clear()
     }
 
     private fun parseGunDisplayDefinitions(rawDisplays: Map<ResourceLocation, TACZDisplayDefinition>) {
@@ -300,14 +328,14 @@ internal object TACZClientAssetManager {
                     }
                 }
                 for (scriptLoc in neededScripts) {
-                    if (scripts.containsKey(scriptLoc)) continue
+                    if (pendingScriptSources.containsKey(scriptLoc) || scripts.containsKey(scriptLoc)) continue
                     val entryPath = "assets/${scriptLoc.namespace}/scripts/${scriptLoc.path}.lua"
                     val entry = zip.getEntry(entryPath) ?: continue
                     try {
                         val source = zip.getInputStream(entry).bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
-                        loadScriptFromSource(scriptLoc, source)
+                        pendingScriptSources[scriptLoc] = source
                     } catch (e: Exception) {
-                        TACZLegacy.logger.warn(MARKER, "Failed to load script {} from {}", scriptLoc, file.name, e)
+                        TACZLegacy.logger.warn(MARKER, "Failed to read script {} from {}", scriptLoc, file.name, e)
                     }
                 }
             }
@@ -360,14 +388,14 @@ internal object TACZClientAssetManager {
             }
         }
         for (scriptLoc in neededScripts) {
-            if (scripts.containsKey(scriptLoc)) continue
+            if (pendingScriptSources.containsKey(scriptLoc) || scripts.containsKey(scriptLoc)) continue
             val filePath = root.toPath().resolve("assets/${scriptLoc.namespace}/scripts/${scriptLoc.path}.lua")
             if (!Files.isRegularFile(filePath)) continue
             try {
                 val source = Files.newBufferedReader(filePath, StandardCharsets.UTF_8).use { it.readText() }
-                loadScriptFromSource(scriptLoc, source)
+                pendingScriptSources[scriptLoc] = source
             } catch (e: Exception) {
-                TACZLegacy.logger.warn(MARKER, "Failed to load script {} from dir {}", scriptLoc, root.name, e)
+                TACZLegacy.logger.warn(MARKER, "Failed to read script source {} from dir {}", scriptLoc, root.name, e)
             }
         }
     }
@@ -428,6 +456,17 @@ internal object TACZClientAssetManager {
 
     private fun loadScriptFromSource(id: ResourceLocation, source: String) {
         val globals = createSecureGlobals()
+        // Install previously loaded scripts as require()-able modules.
+        // Gun pack scripts use require("{namespace}_{path}") to reference each other.
+        val preload = globals.get("package").get("preload")
+        if (preload is LuaTable) {
+            for ((scriptId, scriptTable) in scripts) {
+                val requireName = "${scriptId.namespace}_${scriptId.path}"
+                preload.set(requireName, object : org.luaj.vm2.lib.ZeroArgFunction() {
+                    override fun call(): LuaValue = scriptTable
+                })
+            }
+        }
         val chunk = globals.load(source, id.toString())
         val result = chunk.call()
         if (result is LuaTable) {
@@ -439,5 +478,33 @@ internal object TACZClientAssetManager {
         } else {
             TACZLegacy.logger.warn(MARKER, "Script {} did not return a table", id)
         }
+    }
+
+    /**
+     * Resolve all pending script sources with a dependency-aware retry loop.
+     * Scripts may require() other scripts; we load repeatedly until no progress is made.
+     */
+    private fun resolveAllScripts() {
+        val remaining = LinkedHashMap(pendingScriptSources)
+        var lastSize = -1
+        while (remaining.isNotEmpty() && remaining.size != lastSize) {
+            lastSize = remaining.size
+            val iterator = remaining.entries.iterator()
+            while (iterator.hasNext()) {
+                val (id, source) = iterator.next()
+                try {
+                    loadScriptFromSource(id, source)
+                    iterator.remove()
+                } catch (_: Exception) {
+                    // Likely a require() for a script not yet loaded — will retry
+                }
+            }
+        }
+        if (remaining.isNotEmpty()) {
+            for (id in remaining.keys) {
+                TACZLegacy.logger.warn(MARKER, "Script {} could not be resolved (unmet require dependency)", id)
+            }
+        }
+        pendingScriptSources.clear()
     }
 }

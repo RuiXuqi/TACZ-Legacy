@@ -1,6 +1,7 @@
 package com.tacz.legacy.client
 
 import com.tacz.legacy.TACZLegacy
+import com.tacz.legacy.client.event.FirstPersonRenderGunEvent
 import com.tacz.legacy.client.event.LegacyClientInputEventHandler
 import com.tacz.legacy.client.event.LegacyClientOverlayEventHandler
 import com.tacz.legacy.client.gui.GunSmithTableScreen
@@ -29,6 +30,7 @@ internal class ClientProxy : CommonProxy() {
         MinecraftForge.EVENT_BUS.register(ClientConfigEventHandler)
         MinecraftForge.EVENT_BUS.register(LegacyClientInputEventHandler)
         MinecraftForge.EVENT_BUS.register(LegacyClientOverlayEventHandler)
+        MinecraftForge.EVENT_BUS.register(FirstPersonRenderGunEvent)
     }
 
     override fun init(): Unit {

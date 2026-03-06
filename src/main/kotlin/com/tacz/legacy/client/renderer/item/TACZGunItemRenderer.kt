@@ -46,7 +46,8 @@ internal object TACZGunItemRenderer : TileEntityItemStackRenderer() {
 
         // Resolve model
         val modelLocation: ResourceLocation = display.modelLocation ?: return
-        val model: BedrockModel = TACZClientAssetManager.getModel(modelLocation) ?: return
+        val modelData = TACZClientAssetManager.getModel(modelLocation) ?: return
+        val model = BedrockModel(modelData.pojo, modelData.version)
 
         // Resolve texture
         val textureLocation: ResourceLocation = display.modelTexture ?: return

@@ -48,7 +48,8 @@ internal object TACZAmmoItemRenderer : TileEntityItemStackRenderer() {
         // Resolve 3D model
         val modelLoc: ResourceLocation? = display.modelLocation
         val textureLoc: ResourceLocation? = display.modelTexture
-        val model: BedrockModel? = if (modelLoc != null) TACZClientAssetManager.getModel(modelLoc) else null
+        val modelData = if (modelLoc != null) TACZClientAssetManager.getModel(modelLoc) else null
+        val model: BedrockModel? = if (modelData != null) BedrockModel(modelData.pojo, modelData.version) else null
         val registeredTexture: ResourceLocation? = if (textureLoc != null) TACZClientAssetManager.getTextureLocation(textureLoc) else null
 
         if (model == null || registeredTexture == null) {

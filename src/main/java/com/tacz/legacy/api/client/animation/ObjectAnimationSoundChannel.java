@@ -1,5 +1,8 @@
 package com.tacz.legacy.api.client.animation;
 
+import com.tacz.legacy.client.sound.GunSoundPlayManager;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.entity.Entity;
 import net.minecraft.util.ResourceLocation;
 
@@ -17,7 +20,7 @@ public class ObjectAnimationSoundChannel {
 
     /**
      * 播放区间内的所有声音。时间区间左开右闭。
-     * Sound playback is a stub — wire to actual sound system when available.
+     * Port of upstream TACZ ObjectAnimationSoundChannel.playSound.
      */
     public void playSound(double fromTimeS, double toTimeS, Entity entity, int distance, float volume, float pitch) {
         if (content == null) {
@@ -32,9 +35,17 @@ public class ObjectAnimationSoundChannel {
         }
         int to = computeIndex(toTimeS, false);
         int from = computeIndex(fromTimeS, true);
+        float mixVolume = volume;
+        // Distance-based attenuation matching upstream
+        EntityPlayerSP player = Minecraft.getMinecraft().player;
+        if (player != null) {
+            double distSq = player.getDistanceSq(entity.posX, entity.posY, entity.posZ);
+            mixVolume = mixVolume * (1.0F - Math.min(1.0F, (float) Math.sqrt(distSq) / distance));
+            mixVolume *= mixVolume;
+        }
         for (int i = from + 1; i <= to; i++) {
             ResourceLocation name = content.keyframeSoundName[i];
-            // TODO: wire to SoundPlayManager equivalent for 1.12.2
+            GunSoundPlayManager.playClientSound(entity, name, mixVolume, pitch, distance);
         }
     }
 

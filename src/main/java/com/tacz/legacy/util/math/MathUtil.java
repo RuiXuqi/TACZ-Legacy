@@ -325,4 +325,12 @@ public class MathUtil {
                 (float) cos
         };
     }
+
+    public static Quaternionf multiplyQuaternion(Quaternionf quaternion, float multiplier) {
+        float[] arr = multiplyQuaternion(
+                new float[]{quaternion.x(), quaternion.y(), quaternion.z(), quaternion.w()},
+                multiplier
+        );
+        return new Quaternionf(arr[0], arr[1], arr[2], arr[3]);
+    }
 }
