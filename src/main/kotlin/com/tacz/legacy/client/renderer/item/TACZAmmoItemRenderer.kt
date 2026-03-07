@@ -1,10 +1,9 @@
 package com.tacz.legacy.client.renderer.item
 
 import com.tacz.legacy.api.item.IAmmo
-import com.tacz.legacy.client.model.BedrockAmmoModel
 import com.tacz.legacy.client.model.SlotModel
+import com.tacz.legacy.client.model.TACZPerspectiveAwareBakedModel
 import com.tacz.legacy.client.model.bedrock.BedrockModel
-import com.tacz.legacy.client.model.bedrock.BedrockPart
 import com.tacz.legacy.client.resource.TACZClientAssetManager
 import com.tacz.legacy.client.resource.pojo.TransformScale
 import com.tacz.legacy.client.resource.pojo.display.ammo.AmmoDisplay
@@ -13,6 +12,7 @@ import com.tacz.legacy.common.resource.TACZGunPackPresentation
 import com.tacz.legacy.common.resource.TACZGunPackRuntimeRegistry
 import net.minecraft.client.Minecraft
 import net.minecraft.client.renderer.GlStateManager
+import net.minecraft.client.renderer.block.model.ItemCameraTransforms.TransformType
 import net.minecraft.client.renderer.tileentity.TileEntityItemStackRenderer
 import net.minecraft.item.ItemStack
 import net.minecraft.util.ResourceLocation
@@ -22,8 +22,10 @@ import org.joml.Vector3f
 
 /**
  * TEISR for ammo items.
- * Renders either 3D bedrock model or flat slot texture (for GUI).
- * Port of upstream TACZ AmmoItemRenderer for 1.12.2.
+ *
+ * Context-aware via [TACZPerspectiveAwareBakedModel]:
+ * - **Item presentation contexts** (GUI, dropped, fixed, head) → flat slot texture
+ * - **Hand / 3D contexts** → bedrock model with positioning and scale transforms
  */
 @SideOnly(Side.CLIENT)
 internal object TACZAmmoItemRenderer : TileEntityItemStackRenderer() {
@@ -43,9 +45,15 @@ internal object TACZAmmoItemRenderer : TileEntityItemStackRenderer() {
         val displayId = TACZGunPackPresentation.resolveAmmoDisplayId(snapshot, ammoId) ?: return
         val display: AmmoDisplay = TACZClientAssetManager.getAmmoDisplay(displayId) ?: return
 
-        GlStateManager.pushMatrix()
+        val transformType = TACZPerspectiveAwareBakedModel.getCurrentTransformType()
 
-        // Resolve 3D model
+        // Item presentation contexts → always use flat slot texture
+        if (TACZPerspectiveAwareBakedModel.isItemPresentationContext(transformType)) {
+            renderSlotTexture(display)
+            return
+        }
+
+        // Hand / 3D contexts → try 3D model, else fall back to slot
         val modelLoc: ResourceLocation? = display.modelLocation
         val textureLoc: ResourceLocation? = display.modelTexture
         val modelData = if (modelLoc != null) TACZClientAssetManager.getModel(modelLoc) else null
@@ -53,22 +61,19 @@ internal object TACZAmmoItemRenderer : TileEntityItemStackRenderer() {
         val registeredTexture: ResourceLocation? = if (textureLoc != null) TACZClientAssetManager.getTextureLocation(textureLoc) else null
 
         if (model == null || registeredTexture == null) {
-            // Fallback: render flat slot texture
-            renderSlotFallback(display)
-            GlStateManager.popMatrix()
+            renderSlotTexture(display)
             return
         }
 
-        // 3D model rendering
+        GlStateManager.pushMatrix()
         Minecraft.getMinecraft().textureManager.bindTexture(registeredTexture)
 
         GlStateManager.translate(0.5f, 2.0f, 0.5f)
         GlStateManager.scale(-1f, -1f, 1f)
 
-        // Apply scale transform
         val transform: AmmoTransform = display.transform ?: AmmoTransform.getDefault()
         val scale: TransformScale? = transform.scale
-        applyScaleTransform(scale)
+        applyScaleTransform(transformType, scale)
 
         GlStateManager.enableLighting()
         GlStateManager.enableRescaleNormal()
@@ -87,11 +92,12 @@ internal object TACZAmmoItemRenderer : TileEntityItemStackRenderer() {
         GlStateManager.popMatrix()
     }
 
-    private fun renderSlotFallback(display: AmmoDisplay) {
+    private fun renderSlotTexture(display: AmmoDisplay) {
         val slotTexLoc = display.slotTextureLocation ?: return
         val registeredSlot = TACZClientAssetManager.getTextureLocation(slotTexLoc) ?: return
         Minecraft.getMinecraft().textureManager.bindTexture(registeredSlot)
 
+        GlStateManager.pushMatrix()
         GlStateManager.translate(0.5f, 1.5f, 0.5f)
         GlStateManager.rotate(180f, 0f, 0f, 1f)
 
@@ -109,12 +115,18 @@ internal object TACZAmmoItemRenderer : TileEntityItemStackRenderer() {
 
         GlStateManager.disableBlend()
         GlStateManager.disableRescaleNormal()
+        GlStateManager.popMatrix()
     }
 
-    private fun applyScaleTransform(scale: TransformScale?) {
+    private fun applyScaleTransform(transformType: TransformType, scale: TransformScale?) {
         if (scale == null) return
-        // Use thirdPerson scale as default for now (ItemDisplayContext isn't available in 1.12.2 TEISR)
-        val v: Vector3f = scale.thirdPerson ?: return
+        val v: Vector3f = when (transformType) {
+            TransformType.FIXED -> scale.fixed
+            TransformType.GROUND -> scale.ground
+            TransformType.THIRD_PERSON_RIGHT_HAND,
+            TransformType.THIRD_PERSON_LEFT_HAND -> scale.thirdPerson
+            else -> scale.thirdPerson
+        } ?: return
         GlStateManager.translate(0f, 1.5f, 0f)
         GlStateManager.scale(v.x(), v.y(), v.z())
         GlStateManager.translate(0f, -1.5f, 0f)

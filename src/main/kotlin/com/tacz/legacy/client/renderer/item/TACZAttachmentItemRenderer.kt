@@ -2,6 +2,7 @@ package com.tacz.legacy.client.renderer.item
 
 import com.tacz.legacy.api.item.IAttachment
 import com.tacz.legacy.client.model.SlotModel
+import com.tacz.legacy.client.model.TACZPerspectiveAwareBakedModel
 import com.tacz.legacy.client.model.bedrock.BedrockModel
 import com.tacz.legacy.client.resource.TACZClientAssetManager
 import com.tacz.legacy.client.resource.pojo.display.attachment.AttachmentDisplay
@@ -9,6 +10,7 @@ import com.tacz.legacy.common.resource.TACZGunPackPresentation
 import com.tacz.legacy.common.resource.TACZGunPackRuntimeRegistry
 import net.minecraft.client.Minecraft
 import net.minecraft.client.renderer.GlStateManager
+import net.minecraft.client.renderer.block.model.ItemCameraTransforms.TransformType
 import net.minecraft.client.renderer.tileentity.TileEntityItemStackRenderer
 import net.minecraft.item.ItemStack
 import net.minecraft.util.ResourceLocation
@@ -17,8 +19,10 @@ import net.minecraftforge.fml.relauncher.SideOnly
 
 /**
  * TEISR for attachment items.
- * Renders either 3D bedrock model or flat slot texture (for GUI).
- * Port of upstream TACZ AttachmentItemRenderer for 1.12.2.
+ *
+ * Context-aware via [TACZPerspectiveAwareBakedModel]:
+ * - **Item presentation contexts** (GUI, dropped, fixed, head) → flat slot texture
+ * - **Hand / 3D contexts** → bedrock model
  */
 @SideOnly(Side.CLIENT)
 internal object TACZAttachmentItemRenderer : TileEntityItemStackRenderer() {
@@ -38,9 +42,15 @@ internal object TACZAttachmentItemRenderer : TileEntityItemStackRenderer() {
         val displayId = TACZGunPackPresentation.resolveAttachmentDisplayId(snapshot, attachmentId) ?: return
         val display: AttachmentDisplay = TACZClientAssetManager.getAttachmentDisplay(displayId) ?: return
 
-        GlStateManager.pushMatrix()
+        val transformType = TACZPerspectiveAwareBakedModel.getCurrentTransformType()
 
-        // Resolve 3D model
+        // Item presentation contexts → always use flat slot texture
+        if (TACZPerspectiveAwareBakedModel.isItemPresentationContext(transformType)) {
+            renderSlotTexture(display)
+            return
+        }
+
+        // Hand / 3D contexts → try 3D model, else fall back to slot
         val modelLoc: ResourceLocation? = display.model
         val textureLoc: ResourceLocation? = display.texture
         val modelData = if (modelLoc != null) TACZClientAssetManager.getModel(modelLoc) else null
@@ -48,17 +58,20 @@ internal object TACZAttachmentItemRenderer : TileEntityItemStackRenderer() {
         val registeredTexture: ResourceLocation? = if (textureLoc != null) TACZClientAssetManager.getTextureLocation(textureLoc) else null
 
         if (model == null || registeredTexture == null) {
-            // Fallback: render flat slot texture
-            renderSlotFallback(display)
-            GlStateManager.popMatrix()
+            renderSlotTexture(display)
             return
         }
 
-        // 3D model rendering
+        GlStateManager.pushMatrix()
         Minecraft.getMinecraft().textureManager.bindTexture(registeredTexture)
 
         GlStateManager.translate(0.5f, 2.0f, 0.5f)
         GlStateManager.scale(-1f, -1f, 1f)
+
+        // Fixed context: rotate 90° like upstream
+        if (transformType == TransformType.FIXED) {
+            GlStateManager.rotate(-90f, 0f, 1f, 0f)
+        }
 
         GlStateManager.enableLighting()
         GlStateManager.enableRescaleNormal()
@@ -77,11 +90,12 @@ internal object TACZAttachmentItemRenderer : TileEntityItemStackRenderer() {
         GlStateManager.popMatrix()
     }
 
-    private fun renderSlotFallback(display: AttachmentDisplay) {
+    private fun renderSlotTexture(display: AttachmentDisplay) {
         val slotTexLoc = display.slotTextureLocation ?: return
         val registeredSlot = TACZClientAssetManager.getTextureLocation(slotTexLoc) ?: return
         Minecraft.getMinecraft().textureManager.bindTexture(registeredSlot)
 
+        GlStateManager.pushMatrix()
         GlStateManager.translate(0.5f, 1.5f, 0.5f)
         GlStateManager.rotate(180f, 0f, 0f, 1f)
 
@@ -99,5 +113,6 @@ internal object TACZAttachmentItemRenderer : TileEntityItemStackRenderer() {
 
         GlStateManager.disableBlend()
         GlStateManager.disableRescaleNormal()
+        GlStateManager.popMatrix()
     }
 }

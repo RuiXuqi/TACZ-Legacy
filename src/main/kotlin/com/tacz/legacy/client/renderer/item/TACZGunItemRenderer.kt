@@ -1,7 +1,8 @@
 package com.tacz.legacy.client.renderer.item
 
-import com.tacz.legacy.TACZLegacy
 import com.tacz.legacy.api.item.IGun
+import com.tacz.legacy.client.model.SlotModel
+import com.tacz.legacy.client.model.TACZPerspectiveAwareBakedModel
 import com.tacz.legacy.client.model.bedrock.BedrockModel
 import com.tacz.legacy.client.resource.TACZClientAssetManager
 import com.tacz.legacy.client.resource.pojo.display.gun.GunDisplay
@@ -19,15 +20,16 @@ import net.minecraftforge.fml.relauncher.SideOnly
 
 /**
  * TEISR (TileEntityItemStackRenderer) for gun items.
- * Renders bedrock geometry models loaded from gun packs.
  *
- * In 1.12.2, custom 3D item rendering is done via TEISR which is set
- * on the Item via [net.minecraft.item.Item.setTileEntityItemStackRenderer].
- * The item model JSON must specify `"builtin/entity"` as the parent
- * for this renderer to be invoked.
+ * Context-aware rendering via [TACZPerspectiveAwareBakedModel]:
+ * - **Item presentation contexts** (GUI, dropped, fixed, head) → flat slot texture
+ * - **First person** → skipped (handled by FirstPersonRenderGunEvent)
+ * - **Third person right hand** → 3D bedrock model with gun pack texture
+ * - **Third person left hand** → skipped (upstream convention)
  */
 @SideOnly(Side.CLIENT)
 internal object TACZGunItemRenderer : TileEntityItemStackRenderer() {
+    private val SLOT_MODEL = SlotModel()
 
     override fun renderByItem(stack: ItemStack) {
         renderByItem(stack, 1.0f)
@@ -40,31 +42,41 @@ internal object TACZGunItemRenderer : TileEntityItemStackRenderer() {
         val snapshot = TACZGunPackRuntimeRegistry.getSnapshot()
         val gunId = item.getGunId(stack)
 
-        // Resolve display definition
         val displayId = TACZGunPackPresentation.resolveGunDisplayId(snapshot, gunId) ?: return
         val display: GunDisplay = TACZClientAssetManager.getGunDisplay(displayId) ?: return
 
-        // Resolve model
-        val modelLocation: ResourceLocation = display.modelLocation ?: return
-        val modelData = TACZClientAssetManager.getModel(modelLocation) ?: return
-        val model = BedrockModel(modelData.pojo, modelData.version)
+        val transformType = TACZPerspectiveAwareBakedModel.getCurrentTransformType()
 
-        // Resolve texture
-        val textureLocation: ResourceLocation = display.modelTexture ?: return
-        val registeredTexture: ResourceLocation = TACZClientAssetManager.getTextureLocation(textureLocation) ?: return
+        // First person is handled by FirstPersonRenderGunEvent
+        if (transformType == ItemCameraTransforms.TransformType.FIRST_PERSON_LEFT_HAND ||
+            transformType == ItemCameraTransforms.TransformType.FIRST_PERSON_RIGHT_HAND) {
+            return
+        }
 
-        // Bind texture
-        Minecraft.getMinecraft().textureManager.bindTexture(registeredTexture)
+        // Third person left hand — skip per upstream convention
+        if (transformType == ItemCameraTransforms.TransformType.THIRD_PERSON_LEFT_HAND) {
+            return
+        }
 
-        // Apply transforms based on display context
-        val transform: GunTransform = display.transform ?: GunTransform.getDefault()
+        // Item presentation contexts → flat slot texture
+        if (TACZPerspectiveAwareBakedModel.isItemPresentationContext(transformType)) {
+            renderSlotTexture(display)
+            return
+        }
+
+        // Third person right hand → 3D model
+        renderGunModel(display)
+    }
+
+    private fun renderSlotTexture(display: GunDisplay) {
+        val slotTexLoc = display.slotTextureLocation ?: return
+        val registeredSlot = TACZClientAssetManager.getTextureLocation(slotTexLoc) ?: return
+        Minecraft.getMinecraft().textureManager.bindTexture(registeredSlot)
 
         GlStateManager.pushMatrix()
+        GlStateManager.translate(0.5f, 1.5f, 0.5f)
+        GlStateManager.rotate(180f, 0f, 0f, 1f)
 
-        // Apply basic transform to center model
-        GlStateManager.translate(0.5f, 0.5f, 0.5f)
-
-        // Enable lighting and correct GL state
         GlStateManager.enableLighting()
         GlStateManager.enableRescaleNormal()
         GlStateManager.enableBlend()
@@ -75,12 +87,41 @@ internal object TACZGunItemRenderer : TileEntityItemStackRenderer() {
             GlStateManager.DestFactor.ZERO,
         )
 
-        // Render model
+        SLOT_MODEL.render()
+
+        GlStateManager.disableBlend()
+        GlStateManager.disableRescaleNormal()
+        GlStateManager.popMatrix()
+    }
+
+    private fun renderGunModel(display: GunDisplay) {
+        val modelLocation: ResourceLocation = display.modelLocation ?: return
+        val modelData = TACZClientAssetManager.getModel(modelLocation) ?: return
+        val model = BedrockModel(modelData.pojo, modelData.version)
+
+        val textureLocation: ResourceLocation = display.modelTexture ?: return
+        val registeredTexture: ResourceLocation = TACZClientAssetManager.getTextureLocation(textureLocation) ?: return
+
+        Minecraft.getMinecraft().textureManager.bindTexture(registeredTexture)
+
+        GlStateManager.pushMatrix()
+        GlStateManager.translate(0.5f, 2.0f, 0.5f)
+        GlStateManager.scale(-1f, -1f, 1f)
+
+        GlStateManager.enableLighting()
+        GlStateManager.enableRescaleNormal()
+        GlStateManager.enableBlend()
+        GlStateManager.tryBlendFuncSeparate(
+            GlStateManager.SourceFactor.SRC_ALPHA,
+            GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA,
+            GlStateManager.SourceFactor.ONE,
+            GlStateManager.DestFactor.ZERO,
+        )
+
         model.render()
 
         GlStateManager.disableBlend()
         GlStateManager.disableRescaleNormal()
-
         GlStateManager.popMatrix()
     }
 }
