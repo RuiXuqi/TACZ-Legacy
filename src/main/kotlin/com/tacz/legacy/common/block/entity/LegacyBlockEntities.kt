@@ -37,6 +37,15 @@ internal class GunSmithTableTileEntity : TileEntity() {
         tag.setString("BlockId", blockId.toString())
         return tag
     }
+
+    override fun getUpdateTag(): NBTTagCompound = writeToNBT(NBTTagCompound())
+
+    override fun getUpdatePacket(): net.minecraft.network.play.server.SPacketUpdateTileEntity =
+        net.minecraft.network.play.server.SPacketUpdateTileEntity(pos, 0, updateTag)
+
+    override fun onDataPacket(net: net.minecraft.network.NetworkManager, pkt: net.minecraft.network.play.server.SPacketUpdateTileEntity) {
+        readFromNBT(pkt.nbtCompound)
+    }
 }
 
 internal class TargetTileEntity : TileEntity() {

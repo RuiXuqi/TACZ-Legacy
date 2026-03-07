@@ -1,39 +1,36 @@
-package com.tacz.legacy.client.renderer.item
+package com.tacz.legacy.client.renderer.block
 
-import com.tacz.legacy.client.model.TACZPerspectiveAwareBakedModel
 import com.tacz.legacy.client.model.bedrock.BedrockModel
 import com.tacz.legacy.client.resource.TACZClientAssetManager
 import com.tacz.legacy.client.resource.pojo.display.block.BlockDisplay
-import com.tacz.legacy.client.resource.pojo.display.block.BlockTransform
-import com.tacz.legacy.common.item.LegacyBlockItem
+import com.tacz.legacy.common.block.entity.GunSmithTableTileEntity
 import com.tacz.legacy.common.resource.TACZGunPackPresentation
 import com.tacz.legacy.common.resource.TACZGunPackRuntimeRegistry
 import net.minecraft.client.Minecraft
 import net.minecraft.client.renderer.GlStateManager
-import net.minecraft.client.renderer.tileentity.TileEntityItemStackRenderer
-import net.minecraft.item.ItemStack
+import net.minecraft.client.renderer.tileentity.TileEntitySpecialRenderer
 import net.minecraft.util.ResourceLocation
 import net.minecraftforge.fml.relauncher.Side
 import net.minecraftforge.fml.relauncher.SideOnly
 
 /**
- * TEISR for block items (GunSmithTable, Workbench variants).
+ * World-space renderer for gun smith table / workbench blocks.
  *
- * Applies per-context transforms from [BlockDisplay.getTransforms], then
- * renders the bedrock model. Block displays do not have a slot texture.
+ * Port of upstream TACZ [GunSmithTableRenderer]:
+ * - Resolves block display from the TileEntity's blockId
+ * - Renders the bedrock model at the block position with Z-180 flip
  */
 @SideOnly(Side.CLIENT)
-internal object TACZBlockItemRenderer : TileEntityItemStackRenderer() {
+internal class GunSmithTableTileEntityRenderer : TileEntitySpecialRenderer<GunSmithTableTileEntity>() {
 
-    override fun renderByItem(stack: ItemStack) {
-        renderByItem(stack, 1.0f)
-    }
-
-    override fun renderByItem(stack: ItemStack, partialTicks: Float) {
-        val item = stack.item
-        if (item !is LegacyBlockItem) return
-
-        val blockId = item.getBlockId(stack)
+    override fun render(
+        te: GunSmithTableTileEntity,
+        x: Double, y: Double, z: Double,
+        partialTicks: Float,
+        destroyStage: Int,
+        alpha: Float,
+    ) {
+        val blockId: ResourceLocation = te.blockId
         val snapshot = TACZGunPackRuntimeRegistry.getSnapshot()
 
         val displayId = TACZGunPackPresentation.resolveBlockDisplayId(snapshot, blockId) ?: return
@@ -48,20 +45,8 @@ internal object TACZBlockItemRenderer : TileEntityItemStackRenderer() {
 
         Minecraft.getMinecraft().textureManager.bindTexture(registeredTexture)
 
-        val transformType = TACZPerspectiveAwareBakedModel.getCurrentTransformType()
-
         GlStateManager.pushMatrix()
-
-        // Apply per-context transforms from block display JSON (upstream GunSmithTableItemRenderer pattern)
-        val transforms: BlockTransform? = display.transforms
-        val entry: BlockTransform.Entry? = transforms?.getForType(transformType)
-        if (entry != null) {
-            GlStateManager.translate(0.5f, 0.5f, 0.5f)
-            entry.apply()
-            GlStateManager.translate(-0.5f, -0.5f, -0.5f)
-        }
-
-        GlStateManager.translate(0.5f, 1.5f, 0.5f)
+        GlStateManager.translate(x.toFloat() + 0.5f, y.toFloat() + 1.5f, z.toFloat() + 0.5f)
         GlStateManager.rotate(180f, 0f, 0f, 1f)
 
         GlStateManager.enableLighting()
@@ -80,4 +65,6 @@ internal object TACZBlockItemRenderer : TileEntityItemStackRenderer() {
         GlStateManager.disableRescaleNormal()
         GlStateManager.popMatrix()
     }
+
+    override fun isGlobalRenderer(te: GunSmithTableTileEntity): Boolean = true
 }

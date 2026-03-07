@@ -6,12 +6,14 @@ import com.tacz.legacy.client.event.LegacyClientInputEventHandler
 import com.tacz.legacy.client.event.LegacyClientOverlayEventHandler
 import com.tacz.legacy.client.gui.GunSmithTableScreen
 import com.tacz.legacy.client.input.LegacyKeyBindings
+import com.tacz.legacy.client.renderer.block.GunSmithTableTileEntityRenderer
 import com.tacz.legacy.client.renderer.item.TACZAmmoItemRenderer
 import com.tacz.legacy.client.renderer.item.TACZAttachmentItemRenderer
 import com.tacz.legacy.client.renderer.item.TACZBlockItemRenderer
 import com.tacz.legacy.client.renderer.item.TACZGunItemRenderer
 import com.tacz.legacy.client.resource.TACZClientAssetManager
 import com.tacz.legacy.common.CommonProxy
+import com.tacz.legacy.common.block.entity.GunSmithTableTileEntity
 import com.tacz.legacy.common.foundation.BootstrapDiagnostics
 import com.tacz.legacy.common.foundation.BootstrapStep
 import com.tacz.legacy.common.gui.LegacyGuiIds
@@ -24,6 +26,7 @@ import net.minecraft.entity.player.EntityPlayer
 import net.minecraft.util.math.BlockPos
 import net.minecraft.world.World
 import net.minecraftforge.common.MinecraftForge
+import net.minecraftforge.fml.client.registry.ClientRegistry
 
 internal class ClientProxy : CommonProxy() {
     init {
@@ -47,6 +50,9 @@ internal class ClientProxy : CommonProxy() {
         LegacyItems.WORKBENCH_A.setTileEntityItemStackRenderer(TACZBlockItemRenderer)
         LegacyItems.WORKBENCH_B.setTileEntityItemStackRenderer(TACZBlockItemRenderer)
         LegacyItems.WORKBENCH_C.setTileEntityItemStackRenderer(TACZBlockItemRenderer)
+
+        // World-space TESR for gun smith table / workbench blocks
+        ClientRegistry.bindTileEntitySpecialRenderer(GunSmithTableTileEntity::class.java, GunSmithTableTileEntityRenderer())
 
         // Load client-side assets (models, textures) from the already-loaded gun pack snapshot
         val snapshot = TACZGunPackRuntimeRegistry.getSnapshot()

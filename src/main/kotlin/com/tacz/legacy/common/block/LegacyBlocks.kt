@@ -68,6 +68,8 @@ internal abstract class LegacyBaseBlock(path: String, material: Material, soundT
 }
 
 internal class LegacyGunSmithTableBlock(path: String) : LegacyBaseBlock(path, Material.WOOD, SoundType.WOOD) {
+    override fun getRenderType(state: IBlockState): EnumBlockRenderType = EnumBlockRenderType.ENTITYBLOCK_ANIMATED
+
     override fun createNewTileEntity(worldIn: World, meta: Int): TileEntity = GunSmithTableTileEntity().apply {
         blockId = requireNotNull(this@LegacyGunSmithTableBlock.registryName)
     }

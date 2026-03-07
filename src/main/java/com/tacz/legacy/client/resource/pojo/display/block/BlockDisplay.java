@@ -16,12 +16,21 @@ public class BlockDisplay {
     @SerializedName("texture")
     private ResourceLocation modelTexture;
 
+    @SerializedName("transforms")
+    @Nullable
+    private BlockTransform transforms;
+
     public ResourceLocation getModelLocation() {
         return modelLocation;
     }
 
     public ResourceLocation getModelTexture() {
         return modelTexture;
+    }
+
+    @Nullable
+    public BlockTransform getTransforms() {
+        return transforms;
     }
 
     /**
