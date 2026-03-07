@@ -126,7 +126,7 @@
 
 - **Foundation**：已完成第一波落地，基础启动、注册、烟测脚本与基础测试已进仓。
 - **数据/枪包兼容**：核心扫描 / 解析 / 索引 / modifier / 兼容读取主链已落地，并已开始被真实消费到 item、tooltip、workbench 摘要、recipe filter、attachment tag 等路径；当前优先级转为**回归修复、缺口补齐与新增消费点接入**。
-- **战斗/实体/网络**：服务端 shooter 状态机、网络通道与主消息骨架已落地，并已补齐 ammo 搜索 parity、缺失的 S2C 消息类型与基础客户端事件投递链路；当前优先级转为**回归修复、剩余 parity 收尾与表现层继续消费**。
+- **战斗/实体/网络**：服务端 shooter 状态机、网络通道与主消息骨架已落地，并已补齐 ammo 搜索 parity、缺失的 S2C 消息类型与基础客户端事件投递链路；2026-03-08 本轮已进一步补齐 burst cadence / fire-mode 真值：`GunDataAccessor` 改为按上游读取 `burst_data`（不再把 `min_interval` 错读成 display 层 `burst`，默认值也回到上游的 `1.0s / count=3 / bpm=200 / continuous=false`），`LegacyClientPlayerGunBridge` 改回上游风格的 `auto|continuous-burst` 按住触发与 `semi|burst-semi` 按下沿触发分流，`LivingEntityShoot` 则新增服务端 `BurstFireTaskScheduler`，让一次合法 burst 扳机在服务端按 `burstShootInterval` 连续击发，而不是退化成“客户端连点/按住反复发单发包”。定向测试已覆盖 burst 解析与调度器周期语义；focused smoke 现可强制 regular gun，使用 `tacz:b93r` + `tacz:rpg7` 的实机链路已验证 `GUN_FIRE side=SERVER gun=tacz:b93r count=1/2/3`、`REGULAR_PROJECTILE_GATE_OPEN fireCount=3/3` 与最终 `PASS`。当前优先级继续转为**剩余 parity 收尾与表现层继续消费**。
 - **音频系统 / smoke 守门**：专用音频 runtime 的阶段 A/B 已落地：`GunSoundPlayManager -> TACZAudioRuntime` 统一 facade 已建立，reload 阶段已有 manifest/probe/preflight，`diagnostic/null` backend 可用于 smoke，`GunPackSoundResourcePack` 被降级为 `legacy-minecraft` fallback，focused smoke 默认不再依赖原版资源刷新路径。最新两轮 focused smoke 已把根因进一步钉死：`diagnostic` 模式证明 animation / `ServerMessageSound` 请求都能进入 runtime；而默认 `legacy-minecraft` 路径（`build/smoke-tests/runclient-focused-smoke-20260308-032140.log`）证明客户端默认 backend 仍是旧 `SoundHandler` 链，`tacz:hk_mp5a5/hk_mp5a5_shoot` 可提交到 backend，但 `minecraft:rpg7_reload_lower` 这类缺失动画音效会在 legacy 播放链触发 `CodecJOrbis` / `Unable to acquire inputstream` 并拖垮 `runClient`。针对这一点，`TACZAudioRuntime` 现已新增 legacy fallback 的提交前防护：`MISSING/UNTRACKED` 只有在 1.12 资源管理器能真实解析 `sounds/<path>.ogg` 时才允许继续提交，`INVALID_* / IO_ERROR` 会直接 `DROPPED`，从而避免坏引用再次把旧声音栈拖死。当前剩余重点为：dedicated playback backend、decode/normalize/cache 与不兼容资源处置策略。补充说明：本轮重新执行定向 Gradle 测试与 legacy smoke 时，又分别被工作区内无关的 `compileJava` 错误（`MuzzleFlashRender.java` / `BedrockGunModel.java`）以及 Forge 1.12 对多版本 Kotlin jar 的 ASM 扫描问题挡住，因此新的防卡死逻辑已完成静态校验和代码收口，但未能在当前环境噪声下再次跑到 in-world marker。
 - **客户端交互 / UI**：本阶段迭代已完成，已把 runtime 下游消费层推进到真实可用程度，并补上 `gun_smith_table` 的基础 `GUI / container / craft` 闭环。当前已落地内容包括：
   - runtime 翻译 / display / recipe filter / workbench 摘要 / attachment tag 的真实客户端消费入口；
@@ -157,7 +157,7 @@
 
 因此，下一阶段最值得投入的主线通常不是“继续重迁数据/战斗/Client UX/Render 基础设施主链”，而是：
     1. **Render 剩余子轨**：~~animation state machine~~（已落地）、~~关键帧插值~~（已落地）、bone animation application、ammo/attachment display renderer、~~muzzle flash~~（本轮已落地） / shell ejection、第一人称 hand/scope 渲染链路、~~程序化后坐力 / 射击摆动 / 跳跃摆动~~（本轮已落地）、~~ADS 二阶动力学平滑~~（本轮已落地）、~~约束骨骼逆变换~~（本轮已落地）
-      2. **Combat 剩余 parity 子轨**：普通枪稳定出弹、伤害真值、爆炸物命中/延时爆炸语义与服务端裁决一致性
+      2. **Combat 剩余 parity 子轨**：hurt/kill 事件与客户端同步消息、边界 fire-mode 状态切换、以及少数未覆盖武器脚本/门禁边角的一致性收尾
       3. **剩余 blocked 的 Client UX / Refit 能力**：例如 `GunRefitScreen` 本体、安装/卸下/laser 提交消息、screen refresh 回包、附件属性刷新与副作用链
       4. **第三方兼容与剩余玩法收尾**：在核心主链已成形的前提下，继续补 JEI / KubeJS / 高级玩法与表现边角
 
@@ -242,7 +242,7 @@
 4. **Client UX Agent — GUI 样式与 I18n 收尾**
    - 在真实 backend 已接通的前提下补视觉与语言一致性，重点收 `GunRefitScreen` 的沉浸式预览与 world-to-screen 枪模过渡。
 5. **Combat Agent — 射击 cadence / 伤害 / 爆炸真值收口**
-   - 重点处理 burst 射速错误、普通枪伤害不对与 RPG/榴弹的剩余真值偏差。
+   - 继续收 hurt/kill 同步、边界 fire-mode 切换与少数未覆盖脚本门禁；burst cadence、普通枪稳定出弹与 RPG 基础爆炸链路已完成一轮 smoke 级验证。
 6. **基建 Agent — 共享接线与 smoke 守门**
    - 只在前面几条被共享基础问题挡住时介入。
 
@@ -281,3 +281,16 @@
 - **数据/枪包兼容**
 
 因为它们既体量大，又有独特的验证方式。
+
+## 2026-03-08 紧急补充：关于欺骗性交付的应对措施
+**注意**：在首轮拆分任务后，执行第一人称渲染和音频系统的 Agent 均报告“已完成”，但实机反馈显示：
+- Audio 彻底断片（没有音效 log）。
+- 渲染全部卡在 Idle（未接入 `inspect` 状态及原版 Transform 屏中心透视接管失效）。
+- Muzzle Flash、Recoil 等未做。
+
+为此，**测试底层已得到强化**：
+1. 烟测脚本 `scripts/runclient_focused_smoke.sh` 现已具有 `ATTEMPT_INSPECT` 和截图劫持拦截：默认在执行完成第一渲染后强拉 Inspect，并在 0/1/2 秒抓取画面。
+2. 任何 Agent 再次认领这些任务时，**都面临严密的截图核对流程与触发记录追踪**。如果在 `last-focused-screenshots.txt` 中的图片以及截图中枪模型均还在原版位置，或者在日志没有打出真实的播放音频/开火粒子调用，将被一票否决。
+3. 请继续派发以下 Agent (Prompt 已经做针对性强化)：
+   - `TACZ Migration` + `.github/prompts/tacz-stage-render-animation-first-person.prompt.md`
+   - `TACZ Migration` + `.github/prompts/tacz-stage-audio-engine-compat.prompt.md`

@@ -55,6 +55,8 @@ internal object FocusedSmokeClientHooks {
         WAIT_GEAR,
         WAIT_BASELINE,
         WAIT_FIRST_RENDER,
+        ATTEMPT_INSPECT,
+        WAIT_INSPECT,
         ATTEMPT_REGULAR_SHOT,
         WAIT_REGULAR_PROJECTILE,
         SWITCH_EXPLOSIVE,
@@ -111,6 +113,8 @@ internal object FocusedSmokeClientHooks {
             Step.WAIT_GEAR -> handleWaitGear(player)
             Step.WAIT_BASELINE -> handleWaitBaseline(player)
             Step.WAIT_FIRST_RENDER -> handleWaitFirstRender(player)
+            Step.ATTEMPT_INSPECT -> handleAttemptInspect(player)
+            Step.WAIT_INSPECT -> handleWaitInspect()
             Step.ATTEMPT_REGULAR_SHOT -> handleAttemptRegularShot(player)
             Step.WAIT_REGULAR_PROJECTILE -> handleWaitRegularProjectile()
             Step.SWITCH_EXPLOSIVE -> handleSwitchExplosive(player)
@@ -253,13 +257,38 @@ internal object FocusedSmokeClientHooks {
 
     private fun handleWaitFirstRender(player: EntityPlayerSP) {
         if (FocusedSmokeRuntime.animationObserved) {
-            transition(Step.ATTEMPT_REGULAR_SHOT, "ANIMATION_GATE_OPEN")
+            transition(Step.ATTEMPT_INSPECT, "ANIMATION_GATE_OPEN")
             return
         }
         if (!animationTimeoutLogged && elapsedMs() > ANIMATION_WAIT_MS) {
             animationTimeoutLogged = true
             FocusedSmokeRuntime.markRegularShootResult("ANIMATION_PENDING_TIMEOUT", currentGunId(player) ?: return)
-            transition(Step.ATTEMPT_REGULAR_SHOT, "ANIMATION_WAIT_TIMEOUT continue_to_projectile_check=true")
+            transition(Step.ATTEMPT_INSPECT, "ANIMATION_WAIT_TIMEOUT continue_to_inspect_check=true")
+        }
+    }
+
+    private fun handleAttemptInspect(player: EntityPlayerSP) {
+        val plan = FocusedSmokeRuntime.currentPlan() ?: run {
+            FocusedSmokeRuntime.markFailure("no_regular_gun_plan")
+            step = Step.FAILED
+            return
+        }
+        ensureHoldingGun(player, plan.regularGunId, preferredSlot = 0)
+        if (!holdsGun(player, plan.regularGunId)) {
+            if (elapsedMs() > GEAR_TIMEOUT_MS) {
+                FocusedSmokeRuntime.markFailure("regular_gun_lost_before_inspect")
+                step = Step.FAILED
+            }
+            return
+        }
+        val stack = player.heldItemMainhand
+        LegacyClientGunAnimationDriver.triggerIfInitialized(stack, GunAnimationConstant.INPUT_INSPECT)
+        transition(Step.WAIT_INSPECT, "INSPECT_TRIGGERED gun=${plan.regularGunId}")
+    }
+
+    private fun handleWaitInspect() {
+        if (elapsedMs() > 4000L) {
+            transition(Step.ATTEMPT_REGULAR_SHOT, "INSPECT_COMPLETED wait=4000ms")
         }
     }
 
@@ -299,16 +328,24 @@ internal object FocusedSmokeClientHooks {
             step = Step.FAILED
             return
         }
-        if (FocusedSmokeRuntime.regularProjectileObserved) {
+        if (FocusedSmokeRuntime.regularProjectileObserved && FocusedSmokeRuntime.hasObservedExpectedRegularFireCount()) {
             if (plan.explosiveGunId == null) {
                 finalizeRun()
             } else {
-                transition(Step.SWITCH_EXPLOSIVE, "REGULAR_PROJECTILE_GATE_OPEN gun=${plan.regularGunId}")
+                transition(
+                    Step.SWITCH_EXPLOSIVE,
+                    "REGULAR_PROJECTILE_GATE_OPEN gun=${plan.regularGunId} fireCount=${FocusedSmokeRuntime.regularGunFireCount}/${FocusedSmokeRuntime.expectedRegularFireCount()}"
+                )
             }
             return
         }
         if (elapsedMs() > REGULAR_PROJECTILE_WAIT_MS) {
-            FocusedSmokeRuntime.markFailure("regular_projectile_missing")
+            val reason = if (!FocusedSmokeRuntime.regularProjectileObserved) {
+                "regular_projectile_missing"
+            } else {
+                "regular_burst_incomplete_${FocusedSmokeRuntime.regularGunFireCount}_of_${FocusedSmokeRuntime.expectedRegularFireCount()}"
+            }
+            FocusedSmokeRuntime.markFailure(reason)
             step = Step.FAILED
         }
     }
@@ -508,6 +545,8 @@ internal object FocusedSmokeClientHooks {
             Step.WAIT_GEAR,
             Step.WAIT_BASELINE,
             Step.WAIT_FIRST_RENDER,
+            Step.ATTEMPT_INSPECT,
+            Step.WAIT_INSPECT,
             Step.ATTEMPT_REGULAR_SHOT,
             Step.WAIT_REGULAR_PROJECTILE,
             Step.SWITCH_EXPLOSIVE,
