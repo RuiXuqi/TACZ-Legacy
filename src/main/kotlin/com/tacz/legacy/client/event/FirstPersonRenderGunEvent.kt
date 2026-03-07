@@ -16,6 +16,7 @@ import net.minecraft.client.Minecraft
 import net.minecraft.client.renderer.GlStateManager
 import net.minecraft.util.EnumHand
 import net.minecraft.util.ResourceLocation
+import net.minecraftforge.client.event.EntityViewRenderEvent
 import net.minecraftforge.client.event.RenderSpecificHandEvent
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent
 import net.minecraftforge.fml.relauncher.Side
@@ -32,6 +33,7 @@ import org.joml.Quaternionf
 @SideOnly(Side.CLIENT)
 internal object FirstPersonRenderGunEvent {
     private var lastStateMachine: AnimationStateMachine<*>? = null
+    private var lastRenderedModel: BedrockAnimatedModel? = null
 
     @SubscribeEvent
     @JvmStatic
@@ -99,6 +101,7 @@ internal object FirstPersonRenderGunEvent {
         }
 
         // --- Render ---
+        lastRenderedModel = model
         GlStateManager.pushMatrix()
 
         // Apply root node offsets for view bob compensation
@@ -154,6 +157,23 @@ internal object FirstPersonRenderGunEvent {
 
         // Cancel vanilla rendering
         event.isCanceled = true
+    }
+
+    /**
+     * Apply animation-driven camera rotation to the world camera.
+     * Port of upstream TACZ CameraSetupEvent.applyLevelCameraAnimation.
+     */
+    @SubscribeEvent
+    @JvmStatic
+    internal fun onCameraSetup(event: EntityViewRenderEvent.CameraSetup) {
+        val player = Minecraft.getMinecraft().player ?: return
+        val stack = player.heldItemMainhand
+        if (stack.item !is IGun) return
+        val model = lastRenderedModel ?: return
+        val (yaw, pitch, roll) = applyCameraAnimation(model, event.yaw, event.pitch, event.roll)
+        event.yaw = yaw
+        event.pitch = pitch
+        event.roll = roll
     }
 
     /**
