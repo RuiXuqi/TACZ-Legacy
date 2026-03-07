@@ -75,3 +75,12 @@
 - 优先小步提交：每次改动应可编译、可验证。
 - 避免无关重构；先实现兼容，再做内部优化。
 - 修改构建开关（`use_mixins/use_coremod/...`）后，提醒重新 setup 工作区。
+
+## Agent 协作与汇报规范
+- 所有**可写 Agent** 在完成任务时，必须同时完成两件事：
+  1. 更新至少一份 Git 受控文档（如 `docs/TACZ_AGENT_MIGRATION_PLAN.md`、对应子系统设计文档、对应 `.github/prompts/*.prompt.md`）
+  2. 在本地临时工作区 `.agent-workspace/stage-reports/` 写一份阶段报告，供主 Agent 直接读取确认
+- `.agent-workspace/` 只用于本地协作与阶段交接，**不要提交 Git**；规范见 `docs/TACZ_AGENT_WORKFLOW.md`
+- 若本轮改变了阶段边界、验收标准、剩余任务或推荐分工，必须同步更新 `docs/TACZ_AGENT_MIGRATION_PLAN.md`
+- 若本轮完成了某条子系统设计/落地阶段，必须同步更新对应设计文档，不能只在聊天或临时报告里留下结论
+- 只读侦察 Agent 可不写本地阶段报告文件，但其研究一旦进入实施，实施 Agent 必须补齐上述两层交付

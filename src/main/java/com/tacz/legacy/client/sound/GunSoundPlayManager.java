@@ -1,6 +1,8 @@
 package com.tacz.legacy.client.sound;
 
 import com.tacz.legacy.TACZLegacy;
+import com.tacz.legacy.client.audio.TACZAudioRequestOrigin;
+import com.tacz.legacy.client.audio.TACZAudioRuntime;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.entity.Entity;
@@ -20,25 +22,45 @@ import javax.annotation.Nullable;
 public class GunSoundPlayManager {
     private static final Marker MARKER = MarkerManager.getMarker("GunSound");
     private static final SoundPlaybackBackend MINECRAFT_BACKEND = GunSoundPlayManager::playWithMinecraft;
-    private static SoundPlaybackBackend playbackBackend = MINECRAFT_BACKEND;
+    @Nullable
+    private static volatile SoundPlaybackBackend testingPlaybackBackend;
 
     @Nullable
     public static GunSoundInstance playClientSound(@Nullable Entity entity, @Nullable ResourceLocation soundName, float volume, float pitch, int distance) {
+        return playClientSound(entity, soundName, volume, pitch, distance, TACZAudioRequestOrigin.GENERIC);
+    }
+
+    @Nullable
+    public static GunSoundInstance playAnimationSound(@Nullable Entity entity, @Nullable ResourceLocation soundName, float volume, float pitch, int distance) {
+        return playClientSound(entity, soundName, volume, pitch, distance, TACZAudioRequestOrigin.ANIMATION);
+    }
+
+    @Nullable
+    public static GunSoundInstance playNetworkSound(@Nullable Entity entity, @Nullable ResourceLocation soundName, float volume, float pitch, int distance) {
+        return playClientSound(entity, soundName, volume, pitch, distance, TACZAudioRequestOrigin.SERVER_MESSAGE);
+    }
+
+    @Nullable
+    private static GunSoundInstance playClientSound(@Nullable Entity entity, @Nullable ResourceLocation soundName, float volume, float pitch, int distance, TACZAudioRequestOrigin origin) {
         if (soundName == null) {
             return null;
         }
-        return playbackBackend.play(entity, soundName, volume, pitch, distance);
+        SoundPlaybackBackend backend = testingPlaybackBackend;
+        if (backend != null) {
+            return backend.play(entity, soundName, volume, pitch, distance, origin);
+        }
+        return TACZAudioRuntime.play(entity, soundName, volume, pitch, distance, origin, MINECRAFT_BACKEND);
     }
 
     /**
      * Public test seam for interval/sound-channel tests.
      */
     public static void setPlaybackBackendForTesting(SoundPlaybackBackend backend) {
-        playbackBackend = backend == null ? MINECRAFT_BACKEND : backend;
+        testingPlaybackBackend = backend;
     }
 
     public static void resetPlaybackBackendForTesting() {
-        playbackBackend = MINECRAFT_BACKEND;
+        testingPlaybackBackend = null;
     }
 
     public static float applyClientDistanceMix(@Nullable Entity entity, float volume, int distance) {
@@ -59,7 +81,7 @@ public class GunSoundPlayManager {
     }
 
     @Nullable
-    private static GunSoundInstance playWithMinecraft(@Nullable Entity entity, ResourceLocation soundName, float volume, float pitch, int distance) {
+    private static GunSoundInstance playWithMinecraft(@Nullable Entity entity, ResourceLocation soundName, float volume, float pitch, int distance, TACZAudioRequestOrigin origin) {
         if (entity == null) {
             return null;
         }
@@ -68,7 +90,7 @@ public class GunSoundPlayManager {
             return null;
         }
         GunSoundInstance instance = new GunSoundInstance(entity, distance, soundName, volume, pitch);
-        TACZLegacy.logger.debug(MARKER, "Playing gun pack sound {} (vol={}, pitch={}, dist={})", soundName, volume, pitch, distance);
+        TACZLegacy.logger.debug(MARKER, "Playing gun pack sound {} via {} (vol={}, pitch={}, dist={})", soundName, origin, volume, pitch, distance);
         minecraft.getSoundHandler().playSound(instance);
         return instance;
     }
@@ -76,6 +98,6 @@ public class GunSoundPlayManager {
     @FunctionalInterface
     public interface SoundPlaybackBackend {
         @Nullable
-        GunSoundInstance play(@Nullable Entity entity, ResourceLocation soundName, float volume, float pitch, int distance);
+        GunSoundInstance play(@Nullable Entity entity, ResourceLocation soundName, float volume, float pitch, int distance, TACZAudioRequestOrigin origin);
     }
 }

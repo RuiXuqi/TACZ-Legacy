@@ -35,6 +35,10 @@ public class AttachmentDisplay {
     @SerializedName("zoom")
     private float[] zoom;
 
+    @Nullable
+    @SerializedName("views")
+    private int[] views;
+
     @SerializedName("scope")
     private boolean isScope = false;
 
@@ -43,6 +47,10 @@ public class AttachmentDisplay {
 
     @SerializedName("fov")
     private float fov = 70;
+
+    @Nullable
+    @SerializedName("views_fov")
+    private float[] viewsFov;
 
     @Nullable
     @SerializedName("sounds")
@@ -79,6 +87,11 @@ public class AttachmentDisplay {
         return zoom;
     }
 
+    @Nullable
+    public int[] getViews() {
+        return views;
+    }
+
     public boolean isScope() {
         return isScope;
     }
@@ -89,6 +102,11 @@ public class AttachmentDisplay {
 
     public float getFov() {
         return fov;
+    }
+
+    @Nullable
+    public float[] getViewsFov() {
+        return viewsFov;
     }
 
     @Nullable

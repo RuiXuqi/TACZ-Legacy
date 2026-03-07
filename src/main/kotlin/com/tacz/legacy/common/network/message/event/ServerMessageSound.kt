@@ -98,7 +98,7 @@ public class ServerMessageSound() : IMessage {
                 }
                 val display = TACZClientAssetManager.getGunDisplayInstance(displayId) ?: return@addScheduledTask
                 val soundId = display.getSound(message.soundName) ?: return@addScheduledTask
-                GunSoundPlayManager.playClientSound(entity, soundId, message.volume, message.pitch, message.distance)
+                GunSoundPlayManager.playNetworkSound(entity, soundId, message.volume, message.pitch, message.distance)
             }
             return null
         }

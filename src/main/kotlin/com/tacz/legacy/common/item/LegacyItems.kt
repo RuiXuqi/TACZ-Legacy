@@ -42,8 +42,8 @@ internal object LegacyItems {
     internal val MODERN_KINETIC_GUN: ModernKineticGunItem = ModernKineticGunItem().named("modern_kinetic_gun", LegacyCreativeTabs.GUNS)
     internal val AMMO: AmmoItem = AmmoItem().named("ammo", LegacyCreativeTabs.AMMO)
     internal val ATTACHMENT: AttachmentItem = AttachmentItem().named("attachment", LegacyCreativeTabs.PARTS)
-    internal val AMMO_BOX: AmmoBoxItem = AmmoBoxItem().named("ammo_box", LegacyCreativeTabs.AMMO)
-    internal val TARGET_MINECART: LegacySimpleItem = LegacySimpleItem(maxStackSize = 1).named("target_minecart", LegacyCreativeTabs.DECORATION)
+    internal val AMMO_BOX: AmmoBoxItem = AmmoBoxItem().named("ammo_box", LegacyCreativeTabs.OTHER)
+    internal val TARGET_MINECART: LegacySimpleItem = LegacySimpleItem(maxStackSize = 1).named("target_minecart", LegacyCreativeTabs.OTHER)
 
     internal val GUN_SMITH_TABLE: LegacyBlockItem = createBlockItem(LegacyBlocks.GUN_SMITH_TABLE)
     internal val WORKBENCH_A: LegacyBlockItem = createBlockItem(LegacyBlocks.WORKBENCH_A)
@@ -104,6 +104,8 @@ internal class AmmoItem : Item(), IAmmo {
     init {
         maxStackSize = 1
     }
+
+    override fun getCreativeTabs(): Array<CreativeTabs> = arrayOf(LegacyCreativeTabs.AMMO)
 
     override fun getSubItems(tab: CreativeTabs, items: NonNullList<ItemStack>) {
         if (!isInCreativeTab(tab)) {
@@ -178,17 +180,22 @@ internal class AttachmentItem : Item(), IAttachment {
         maxStackSize = 1
     }
 
+    override fun getCreativeTabs(): Array<CreativeTabs> = LegacyCreativeTabs.attachmentCategoryTabs
+
     override fun getSubItems(tab: CreativeTabs, items: NonNullList<ItemStack>) {
         if (!isInCreativeTab(tab)) {
             return
         }
         val snapshot = TACZGunPackRuntimeRegistry.getSnapshot()
+        val requestedType = LegacyCreativeTabs.attachmentTypeForTab(tab)
         val attachments = TACZGunPackPresentation.sortedAttachments(snapshot)
         if (attachments.isEmpty()) {
             items += ItemStack(this)
             return
         }
-        attachments.forEach { attachment ->
+        attachments.asSequence()
+            .filter { attachment -> requestedType == null || AttachmentType.fromSerializedName(attachment.index.type) == requestedType }
+            .forEach { attachment ->
             val stack = ItemStack(this)
             setAttachmentId(stack, attachment.id)
             items += stack
@@ -280,6 +287,8 @@ internal class AmmoBoxItem : Item(), IAmmoBox {
         maxStackSize = 1
     }
 
+    override fun getCreativeTabs(): Array<CreativeTabs> = arrayOf(LegacyCreativeTabs.OTHER)
+
     override fun getItemStackDisplayName(stack: ItemStack): String {
         return LegacyRuntimeTooltipSupport.resolveDisplayName(stack, super.getItemStackDisplayName(stack))
     }
@@ -344,17 +353,22 @@ internal class ModernKineticGunItem : Item(), IGun {
         maxStackSize = 1
     }
 
+    override fun getCreativeTabs(): Array<CreativeTabs> = LegacyCreativeTabs.gunCategoryTabs
+
     override fun getSubItems(tab: CreativeTabs, items: NonNullList<ItemStack>) {
         if (!isInCreativeTab(tab)) {
             return
         }
         val snapshot = TACZGunPackRuntimeRegistry.getSnapshot()
+        val requestedType = LegacyCreativeTabs.gunTypeForTab(tab)
         val guns = TACZGunPackPresentation.sortedGuns(snapshot)
         if (guns.isEmpty()) {
             items += ItemStack(this)
             return
         }
-        guns.forEach { gun ->
+        guns.asSequence()
+            .filter { gun -> requestedType == null || gun.index.type.equals(requestedType, ignoreCase = true) }
+            .forEach { gun ->
             val stack = ItemStack(this)
             setGunId(stack, gun.id)
             setCurrentAmmoCount(stack, gun.data.ammoAmount.coerceAtLeast(0))
@@ -653,6 +667,8 @@ internal class LegacyBlockItem(block: net.minecraft.block.Block) : ItemBlock(blo
     init {
         maxStackSize = 1
     }
+
+    override fun getCreativeTabs(): Array<CreativeTabs> = arrayOf(LegacyCreativeTabs.OTHER)
 
     fun getBlockId(stack: ItemStack): ResourceLocation {
         val explicitBlockId = stack.tagCompound

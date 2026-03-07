@@ -1,20 +1,30 @@
 package com.tacz.legacy.common.entity.shooter
 
+import com.tacz.legacy.api.DefaultAssets
 import com.tacz.legacy.api.entity.ShootResult
 import com.tacz.legacy.api.event.GunFireEvent
 import com.tacz.legacy.api.event.GunShootEvent
 import com.tacz.legacy.api.item.IGun
 import com.tacz.legacy.api.item.gun.FireMode
+import com.tacz.legacy.common.entity.EntityKineticBullet
+import com.tacz.legacy.common.item.ModernKineticGunItem
+import com.tacz.legacy.common.config.LegacyConfigManager
 import com.tacz.legacy.common.network.TACZNetworkHandler
 import com.tacz.legacy.common.network.message.event.ServerMessageGunFire
 import com.tacz.legacy.common.network.message.event.ServerMessageGunShoot
+import com.tacz.legacy.common.network.message.event.ServerMessageSyncBaseTimestamp
 import com.tacz.legacy.common.resource.BoltType
+import com.tacz.legacy.common.resource.BulletCombatData
+import com.tacz.legacy.common.resource.GunCombatData
 import com.tacz.legacy.common.resource.GunDataAccessor
+import com.tacz.legacy.common.resource.TACZGunPackPresentation
+import com.tacz.legacy.common.resource.TACZGunPackRuntimeRegistry
 import net.minecraft.entity.EntityLivingBase
 import net.minecraft.entity.player.EntityPlayerMP
 import net.minecraft.item.ItemStack
 import net.minecraftforge.common.MinecraftForge
 import net.minecraftforge.fml.relauncher.Side
+import net.minecraftforge.items.CapabilityItemHandler
 import java.util.function.Supplier
 
 /**
@@ -33,16 +43,24 @@ public class LivingEntityShoot(
         val gunData = GunDataAccessor.getGunData(gunId) ?: return ShootResult.ID_NOT_EXIST
 
         // 射击冷却检查
-        val coolDown = getShootCoolDown(timestamp)
-        if (coolDown == -1L) return ShootResult.UNKNOWN_FAIL
-        if (coolDown > 0) return ShootResult.COOL_DOWN
+        if (LegacyConfigManager.server.serverShootCooldownCheck) {
+            val coolDown = getShootCoolDown(timestamp)
+            if (coolDown == -1L) return ShootResult.UNKNOWN_FAIL
+            if (coolDown > 0) return ShootResult.COOL_DOWN
+        }
 
         // 网络时间戳校验
-        if (shooter is EntityPlayerMP) {
-            val alpha = System.currentTimeMillis() - data.baseTimestamp - timestamp
+        if (LegacyConfigManager.server.serverShootNetworkCheck && shooter is EntityPlayerMP) {
+            val now = System.currentTimeMillis()
+            var alpha = now - data.baseTimestamp - timestamp
+            val isFirstTimedShoot = data.shootTimestamp < 0L && data.lastShootTimestamp < 0L
+            if (isFirstTimedShoot && (alpha < -300 || alpha > 600)) {
+                data.baseTimestamp = now - timestamp
+                alpha = now - data.baseTimestamp - timestamp
+            }
             if (alpha < -300 || alpha > 600) {
-                // 时间戳偏移过大，重置 base timestamp
-                data.baseTimestamp = System.currentTimeMillis()
+                // 时间戳偏移过大——发起双向同步握手，而不是单方面重置
+                TACZNetworkHandler.sendToPlayer(ServerMessageSyncBaseTimestamp(), shooter)
                 return ShootResult.NETWORK_FAIL
             }
         }
@@ -75,7 +93,7 @@ public class LivingEntityShoot(
         // 闭膛上膛逻辑
         if (boltType == BoltType.CLOSED_BOLT && !hasAmmoInBarrel) {
             if (useInventoryAmmo) {
-                // 从弹药库消耗 1 发作为膛内弹
+                consumeAmmoFromPlayer(currentGunItem, 1)
             } else {
                 iGun.reduceCurrentAmmoCount(currentGunItem)
             }
@@ -84,7 +102,7 @@ public class LivingEntityShoot(
 
         val logicalSide = if (shooter.world.isRemote) Side.CLIENT else Side.SERVER
         val shootEvent = GunShootEvent(shooter, currentGunItem, logicalSide)
-        if (MinecraftForge.EVENT_BUS.post(shootEvent)) return ShootResult.UNKNOWN_FAIL
+        if (MinecraftForge.EVENT_BUS.post(shootEvent)) return ShootResult.FORGE_EVENT_CANCEL
 
         if (!shooter.world.isRemote) {
             TACZNetworkHandler.sendToTrackingEntity(ServerMessageGunShoot(shooter.entityId, currentGunItem), shooter)
@@ -102,21 +120,12 @@ public class LivingEntityShoot(
     private fun executeShoot(
         gunItem: ItemStack,
         iGun: IGun,
-        gunData: com.tacz.legacy.common.resource.GunCombatData,
+        gunData: GunCombatData,
         pitch: Supplier<Float>,
         yaw: Supplier<Float>,
     ) {
-        // 消耗弹药
-        val useInventoryAmmo = iGun.useInventoryAmmo(gunItem)
-        if (useInventoryAmmo) {
-            // 背包直读消耗 TODO: from inventory
-        } else {
-            if (iGun.hasBulletInBarrel(gunItem) && gunData.boltType != BoltType.OPEN_BOLT) {
-                iGun.setBulletInBarrel(gunItem, false)
-            } else {
-                iGun.reduceCurrentAmmoCount(gunItem)
-            }
-        }
+        // 弹药消耗（bolt-type-aware）
+        if (!reduceAmmoOnce(gunItem, iGun, gunData)) return
 
         val logicalSide = if (shooter.world.isRemote) Side.CLIENT else Side.SERVER
         val fireEvent = GunFireEvent(shooter, gunItem, logicalSide)
@@ -128,14 +137,95 @@ public class LivingEntityShoot(
 
         // 生成子弹实体
         if (!shooter.world.isRemote) {
-            val bullet = com.tacz.legacy.common.entity.EntityKineticBullet(shooter.world, shooter)
+            val bulletData = gunData.bulletData
+            val gunId = iGun.getGunId(gunItem)
+            val snapshot = TACZGunPackRuntimeRegistry.getSnapshot()
+            val gunDisplayId = TACZGunPackPresentation.resolveGunDisplayId(snapshot, gunId) ?: DefaultAssets.DEFAULT_GUN_DISPLAY_ID
+            val ammoId = gunData.ammoId ?: DefaultAssets.EMPTY_AMMO_ID
 
+            val processedSpeed = bulletData.getProcessedSpeed()
+            val bulletAmount = bulletData.bulletAmount.coerceAtLeast(1)
             val pitchVal = pitch.get()
             val yawVal = yaw.get()
-            val speed = 3.0f
-            bullet.shoot(shooter, pitchVal, yawVal, 0.0f, speed, 1.0f)
-            shooter.world.spawnEntity(bullet)
+
+            for (i in 0 until bulletAmount) {
+                val isTracer = bulletData.hasTracerAmmo() && nextBulletIsTracer(bulletData.tracerCountInterval)
+                val bullet = EntityKineticBullet(
+                    shooter.world, shooter, bulletData,
+                    gunId, gunDisplayId, ammoId, isTracer,
+                )
+                bullet.applyShotgunDamageSpread(bulletAmount)
+                bullet.shoot(shooter, pitchVal, yawVal, 0.0f, processedSpeed, 1.0f)
+                shooter.world.spawnEntity(bullet)
+            }
         }
+    }
+
+    /**
+     * 消耗一发弹药。根据 bolt 类型决定消耗膛内还是弹匣内弹药。
+     * 与上游 TACZ ModernKineticGunScriptAPI.reduceAmmoOnce 行为一致。
+     * @return 是否成功消耗弹药
+     */
+    private fun reduceAmmoOnce(gunItem: ItemStack, iGun: IGun, gunData: GunCombatData): Boolean {
+        val boltType = gunData.boltType
+        val hasAmmoInBarrel = iGun.hasBulletInBarrel(gunItem) && boltType != BoltType.OPEN_BOLT
+        val useInventoryAmmo = iGun.useInventoryAmmo(gunItem)
+        val hasInventoryAmmo = if (useInventoryAmmo) iGun.hasInventoryAmmo(shooter, gunItem, true) else false
+        val noAmmo = if (useInventoryAmmo) !hasInventoryAmmo else iGun.getCurrentAmmoCount(gunItem) < 1
+
+        when (boltType) {
+            BoltType.MANUAL_ACTION -> {
+                if (!hasAmmoInBarrel) return false
+                iGun.setBulletInBarrel(gunItem, false)
+                return true
+            }
+            BoltType.CLOSED_BOLT -> {
+                if (!noAmmo) {
+                    if (useInventoryAmmo) {
+                        return consumeAmmoFromPlayer(gunItem, 1) == 1
+                    }
+                    iGun.reduceCurrentAmmoCount(gunItem)
+                    return true
+                }
+                if (!hasAmmoInBarrel) return false
+                iGun.setBulletInBarrel(gunItem, false)
+                return true
+            }
+            BoltType.OPEN_BOLT -> {
+                if (noAmmo) return false
+                if (useInventoryAmmo) {
+                    return consumeAmmoFromPlayer(gunItem, 1) == 1
+                }
+                iGun.reduceCurrentAmmoCount(gunItem)
+                return true
+            }
+        }
+    }
+
+    /**
+     * 从射击者背包消耗弹药。
+     * @return 实际消耗的弹药数量
+     */
+    private fun consumeAmmoFromPlayer(gunItem: ItemStack, neededAmount: Int): Int {
+        val gunItemObj = gunItem.item
+        if (gunItemObj !is ModernKineticGunItem) return 0
+        if (gunItemObj.useDummyAmmo(gunItem)) {
+            val dummy = gunItemObj.getDummyAmmoAmount(gunItem)
+            val consume = minOf(dummy, neededAmount)
+            gunItemObj.setDummyAmmoAmount(gunItem, dummy - consume)
+            return consume
+        }
+        val handler = shooter.getCapability(CapabilityItemHandler.ITEM_HANDLER_CAPABILITY, null) ?: return 0
+        return gunItemObj.findAndExtractInventoryAmmo(handler, gunItem, neededAmount)
+    }
+
+    /**
+     * 曳光弹判定。与上游 nextBulletIsTracer 行为一致。
+     */
+    private fun nextBulletIsTracer(tracerCountInterval: Int): Boolean {
+        data.shootCount++
+        if (tracerCountInterval == -1) return false
+        return data.shootCount % (tracerCountInterval + 1) == 0
     }
 
     /**

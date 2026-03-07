@@ -24,13 +24,18 @@ public object TACZNetworkHandler {
     public fun init() {
         // Client -> Server
         registerC2S<ClientMessageGunSmithCraft>()
+        registerC2S<ClientMessageRefitGun>()
+        registerC2S<ClientMessageUnloadAttachment>()
+        registerC2S<ClientMessageLaserColor>()
         registerC2S<ClientMessagePlayerShoot>()
         registerC2S<ClientMessagePlayerReload>()
+        registerC2S<ClientMessagePlayerCancelReload>()
         registerC2S<ClientMessagePlayerAim>()
         registerC2S<ClientMessagePlayerBolt>()
         registerC2S<ClientMessagePlayerDraw>()
         registerC2S<ClientMessagePlayerMelee>()
         registerC2S<ClientMessagePlayerFireSelect>()
+        registerC2S<ClientMessageSyncBaseTimestamp>()
 
         // Server -> Client (events)
         registerS2C(ServerMessageGunShoot.Handler::class.java, ServerMessageGunShoot::class.java)
@@ -40,6 +45,8 @@ public object TACZNetworkHandler {
         registerS2C(ServerMessageGunFire.Handler::class.java, ServerMessageGunFire::class.java)
         registerS2C(ServerMessageGunDraw.Handler::class.java, ServerMessageGunDraw::class.java)
         registerS2C(ServerMessageGunFireSelect.Handler::class.java, ServerMessageGunFireSelect::class.java)
+        registerS2C(ServerMessageRefreshRefitScreen.Handler::class.java, ServerMessageRefreshRefitScreen::class.java)
+        registerS2C(ServerMessageSyncBaseTimestamp.Handler::class.java, ServerMessageSyncBaseTimestamp::class.java)
     }
 
     /**

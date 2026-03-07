@@ -6,8 +6,11 @@ import com.tacz.legacy.TACZLegacy
 import com.tacz.legacy.api.vmlib.LuaAnimationConstant
 import com.tacz.legacy.api.vmlib.LuaGunAnimationConstant
 import com.tacz.legacy.api.vmlib.LuaLibrary
+import com.tacz.legacy.client.audio.TACZAudioReference
+import com.tacz.legacy.client.audio.TACZAudioRuntime
 import com.tacz.legacy.client.sound.GunPackAssetLocator
 import com.tacz.legacy.client.sound.GunPackSoundResourcePack
+import com.tacz.legacy.client.resource.index.ClientAttachmentIndex
 import com.tacz.legacy.client.resource.pojo.animation.bedrock.AnimationKeyframes
 import com.tacz.legacy.client.resource.pojo.animation.bedrock.BedrockAnimationFile
 import com.tacz.legacy.client.resource.pojo.animation.bedrock.SoundEffectKeyframes
@@ -96,6 +99,9 @@ internal object TACZClientAssetManager {
     /** Resolved gun pack sound resource ids referenced by displays / animation keyframes. */
     private val soundResources = LinkedHashSet<ResourceLocation>()
 
+    /** Detailed sound reference origins for manifest / preflight. */
+    private val audioReferences = LinkedHashMap<ResourceLocation, LinkedHashSet<TACZAudioReference>>()
+
     /** Source pack files backing the currently loaded runtime snapshot. */
     private val packSources = ArrayList<File>()
 
@@ -111,6 +117,9 @@ internal object TACZClientAssetManager {
     /** Cached GunDisplayInstance objects, keyed by display ResourceLocation. */
     private val gunDisplayInstances = LinkedHashMap<ResourceLocation, GunDisplayInstance>()
 
+    /** Cached ClientAttachmentIndex objects, keyed by attachment ResourceLocation. */
+    private val attachmentIndices = LinkedHashMap<ResourceLocation, ClientAttachmentIndex>()
+
     fun getGunDisplay(id: ResourceLocation): GunDisplay? = gunDisplays[id]
     fun getAmmoDisplay(id: ResourceLocation): AmmoDisplay? = ammoDisplays[id]
     fun getAttachmentDisplay(id: ResourceLocation): AttachmentDisplay? = attachmentDisplays[id]
@@ -120,6 +129,7 @@ internal object TACZClientAssetManager {
     fun getAnimationFile(id: ResourceLocation): BedrockAnimationFile? = animations[id]
     fun getScript(id: ResourceLocation): LuaTable? = scripts[id]
     fun getGunDisplayInstance(displayId: ResourceLocation): GunDisplayInstance? = gunDisplayInstances[displayId]
+    fun getAttachmentIndex(attachmentId: ResourceLocation): ClientAttachmentIndex? = attachmentIndices[attachmentId]
     fun hasPackAsset(id: ResourceLocation): Boolean = GunPackAssetLocator.resourceExists(packSources, id)
     fun openPackAsset(id: ResourceLocation): InputStream? = try {
         GunPackAssetLocator.openResource(packSources, id)
@@ -190,8 +200,16 @@ internal object TACZClientAssetManager {
         // Resolve scripts with dependency-aware retry (scripts use require() to reference each other)
         resolveAllScripts()
 
-        // Expose gun pack sound assets to Minecraft's audio resource manager.
-        GunPackSoundResourcePack.installOrUpdate(soundResources)
+        val audioReferenceSnapshot = LinkedHashMap<ResourceLocation, Set<TACZAudioReference>>()
+        for ((soundId, references) in audioReferences) {
+            audioReferenceSnapshot[soundId] = LinkedHashSet(references)
+        }
+        TACZAudioRuntime.reload(ArrayList(packSources), audioReferenceSnapshot)
+
+        // Only keep the vanilla resource-pack bridge alive when explicitly running legacy fallback.
+        GunPackSoundResourcePack.synchronize(soundResources, TACZAudioRuntime.shouldUseLegacyMinecraftBridge())
+
+        buildAttachmentIndices(snapshot)
 
         val totalDisplays = gunDisplays.size + ammoDisplays.size + attachmentDisplays.size + blockDisplays.size
         TACZLegacy.logger.info(MARKER,
@@ -201,6 +219,22 @@ internal object TACZClientAssetManager {
 
         // Build GunDisplayInstance for each gun display
         buildGunDisplayInstances()
+    }
+
+    private fun buildAttachmentIndices(snapshot: TACZRuntimeSnapshot) {
+        attachmentIndices.clear()
+        for ((attachmentId, attachment) in snapshot.attachments) {
+            val displayId = attachment.index.display ?: continue
+            val display = attachmentDisplays[displayId] ?: continue
+            runCatching {
+                ClientAttachmentIndex.create(display, this)
+            }.onSuccess { index ->
+                attachmentIndices[attachmentId] = index
+            }.onFailure { error ->
+                TACZLegacy.logger.warn(MARKER, "Failed to build ClientAttachmentIndex for {}: {}", attachmentId, error.message)
+            }
+        }
+        TACZLegacy.logger.info(MARKER, "Built {} client attachment indices", attachmentIndices.size)
     }
 
     private fun buildGunDisplayInstances() {
@@ -231,10 +265,27 @@ internal object TACZClientAssetManager {
         textures.clear()
         animations.clear()
         soundResources.clear()
+        audioReferences.clear()
         packSources.clear()
         scripts.clear()
         pendingScriptSources.clear()
+        attachmentIndices.clear()
         gunDisplayInstances.clear()
+        TACZAudioRuntime.clear()
+    }
+
+    private fun registerSoundReference(
+        soundId: ResourceLocation?,
+        sourceType: String,
+        ownerId: ResourceLocation? = null,
+        key: String? = null,
+    ) {
+        if (soundId == null) {
+            return
+        }
+        soundResources.add(soundId)
+        audioReferences.getOrPut(soundId) { LinkedHashSet() }
+            .add(TACZAudioReference(sourceType = sourceType, ownerId = ownerId, key = key))
     }
 
     private fun parseGunDisplayDefinitions(rawDisplays: Map<ResourceLocation, TACZDisplayDefinition>) {
@@ -243,7 +294,10 @@ internal object TACZClientAssetManager {
                 val display = DISPLAY_GSON.fromJson(def.raw, GunDisplay::class.java)
                 display.init()
                 gunDisplays[id] = display
-                display.sounds?.values?.forEach(soundResources::add)
+                display.sounds?.forEach { (soundKey, soundId) ->
+                    registerSoundReference(soundId, sourceType = "gun-display", ownerId = id, key = soundKey)
+                    registerSoundReference(soundId, sourceType = "server-sound", ownerId = id, key = soundKey)
+                }
             } catch (e: Exception) {
                 TACZLegacy.logger.warn(MARKER, "Failed to parse gun display: {}", id, e)
             }
@@ -268,7 +322,9 @@ internal object TACZClientAssetManager {
                 val display = DISPLAY_GSON.fromJson(def.raw, AttachmentDisplay::class.java)
                 display.init()
                 attachmentDisplays[id] = display
-                display.sounds?.values?.forEach(soundResources::add)
+                display.sounds?.forEach { (soundKey, soundId) ->
+                    registerSoundReference(soundId, sourceType = "attachment-display", ownerId = id, key = soundKey)
+                }
             } catch (e: Exception) {
                 TACZLegacy.logger.warn(MARKER, "Failed to parse attachment display: {}", id, e)
             }
@@ -460,8 +516,16 @@ internal object TACZClientAssetManager {
             return
         }
         animations[id] = animFile
-        for (animation in animFile.animations.values) {
-            animation.soundEffects?.keyframes?.values?.forEach(soundResources::add)
+        for ((animationName, animation) in animFile.animations) {
+            val soundEffects = animation.soundEffects ?: continue
+            for (entry in soundEffects.keyframes.double2ObjectEntrySet()) {
+                registerSoundReference(
+                    soundId = entry.value,
+                    sourceType = "animation-keyframe",
+                    ownerId = id,
+                    key = "$animationName@${entry.doubleKey}",
+                )
+            }
         }
     }
 

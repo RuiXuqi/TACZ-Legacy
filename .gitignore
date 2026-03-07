@@ -27,3 +27,6 @@ run
 
 # kotlin
 .kotlin
+
+# local agent workflow workspace
+.agent-workspace/

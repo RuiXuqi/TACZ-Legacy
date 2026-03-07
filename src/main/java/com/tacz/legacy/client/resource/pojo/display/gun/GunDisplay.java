@@ -49,11 +49,31 @@ public class GunDisplay {
     @SerializedName("state_machine_param")
     private Map<String, Object> stateMachineParam;
     @Nullable
+    @SerializedName("use_default_animation")
+    private DefaultAnimationType defaultAnimationType;
+    @Nullable
+    @SerializedName("default_animation")
+    private ResourceLocation defaultAnimation;
+    @Nullable
+    @SerializedName("player_animator_3rd")
+    private ResourceLocation playerAnimator3rd;
+    @SerializedName("3rd_fixed_hand")
+    private boolean playerAnimator3rdFixedHand = false;
+    @Nullable
     @SerializedName("sounds")
     private Map<String, ResourceLocation> sounds;
     @Nullable
     @SerializedName("transform")
     private GunTransform transform;
+    @Nullable
+    @SerializedName("shell")
+    private ShellEjection shellEjection;
+    @Nullable
+    @SerializedName("ammo")
+    private GunAmmo gunAmmo;
+    @Nullable
+    @SerializedName("muzzle_flash")
+    private MuzzleFlash muzzleFlash;
     @SerializedName("show_crosshair")
     private boolean showCrosshair = false;
 
@@ -105,6 +125,25 @@ public class GunDisplay {
     }
 
     @Nullable
+    public DefaultAnimationType getDefaultAnimationType() {
+        return defaultAnimationType;
+    }
+
+    @Nullable
+    public ResourceLocation getDefaultAnimation() {
+        return defaultAnimation;
+    }
+
+    @Nullable
+    public ResourceLocation getPlayerAnimator3rd() {
+        return playerAnimator3rd;
+    }
+
+    public boolean is3rdFixedHand() {
+        return playerAnimator3rdFixedHand;
+    }
+
+    @Nullable
     public String getThirdPersonAnimation() {
         return thirdPersonAnimation;
     }
@@ -117,6 +156,21 @@ public class GunDisplay {
     @Nullable
     public GunTransform getTransform() {
         return transform;
+    }
+
+    @Nullable
+    public ShellEjection getShellEjection() {
+        return shellEjection;
+    }
+
+    @Nullable
+    public GunAmmo getGunAmmo() {
+        return gunAmmo;
+    }
+
+    @Nullable
+    public MuzzleFlash getMuzzleFlash() {
+        return muzzleFlash;
     }
 
     public float getIronZoom() {
@@ -152,6 +206,9 @@ public class GunDisplay {
         }
         if (gunLod != null && gunLod.getModelTexture() != null) {
             gunLod.setModelTexture(expandTexturePath(gunLod.getModelTexture()));
+        }
+        if (muzzleFlash != null && muzzleFlash.texture != null) {
+            muzzleFlash.texture = expandTexturePath(muzzleFlash.texture);
         }
     }
 

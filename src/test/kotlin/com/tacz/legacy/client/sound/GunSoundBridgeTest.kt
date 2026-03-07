@@ -1,5 +1,7 @@
 package com.tacz.legacy.client.sound
 
+import com.tacz.legacy.client.audio.TACZAudioRequestOrigin
+import com.tacz.legacy.client.audio.TACZAudioRuntime
 import com.tacz.legacy.api.client.animation.AnimationSoundChannelContent
 import com.tacz.legacy.api.client.animation.ObjectAnimationSoundChannel
 import net.minecraft.util.ResourceLocation
@@ -17,6 +19,7 @@ import java.util.zip.ZipOutputStream
 class GunSoundBridgeTest {
     @After
     fun tearDown() {
+        TACZAudioRuntime.clear()
         GunSoundPlayManager.resetPlaybackBackendForTesting()
     }
 
@@ -59,9 +62,11 @@ class GunSoundBridgeTest {
     @Test
     fun `sound channel plays keyframes inside open closed interval`() {
         val played = mutableListOf<ResourceLocation>()
+        val origins = mutableListOf<TACZAudioRequestOrigin>()
         GunSoundPlayManager.setPlaybackBackendForTesting(
-            GunSoundPlayManager.SoundPlaybackBackend { _, soundName, _, _, _ ->
+            GunSoundPlayManager.SoundPlaybackBackend { _, soundName, _, _, _, origin ->
                 played += soundName
+                origins += origin
                 null
             }
         )
@@ -85,13 +90,17 @@ class GunSoundBridgeTest {
             ),
             played,
         )
+        assertEquals(
+            listOf(TACZAudioRequestOrigin.ANIMATION, TACZAudioRequestOrigin.ANIMATION),
+            origins,
+        )
     }
 
     @Test
     fun `sound channel wrap around plays head then tail segments`() {
         val played = mutableListOf<ResourceLocation>()
         GunSoundPlayManager.setPlaybackBackendForTesting(
-            GunSoundPlayManager.SoundPlaybackBackend { _, soundName, _, _, _ ->
+            GunSoundPlayManager.SoundPlaybackBackend { _, soundName, _, _, _, _ ->
                 played += soundName
                 null
             }
@@ -116,5 +125,20 @@ class GunSoundBridgeTest {
             ),
             played,
         )
+    }
+
+    @Test
+    fun `network sound wrapper tags server message origin`() {
+        val origins = mutableListOf<TACZAudioRequestOrigin>()
+        GunSoundPlayManager.setPlaybackBackendForTesting(
+            GunSoundPlayManager.SoundPlaybackBackend { _, _, _, _, _, origin ->
+                origins += origin
+                null
+            }
+        )
+
+        GunSoundPlayManager.playNetworkSound(null, ResourceLocation("example", "sound/network"), 1f, 1f, 16)
+
+        assertEquals(listOf(TACZAudioRequestOrigin.SERVER_MESSAGE), origins)
     }
 }

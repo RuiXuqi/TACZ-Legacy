@@ -136,6 +136,7 @@ public class BedrockAnimatedModel extends BedrockModel implements AnimationListe
     public AnimationListener supplyListeners(String nodeName, ObjectAnimationChannel.ChannelType type) {
         ModelRendererWrapper model = modelMap.get(nodeName);
         if (model == null) {
+            com.tacz.legacy.TACZLegacy.logger.debug("Animation listener supply failed: node {} not found in modelMap", nodeName);
             return null;
         }
         AnimationListener cameraListener = cameraAnimationObject.supplyListeners(nodeName, type);

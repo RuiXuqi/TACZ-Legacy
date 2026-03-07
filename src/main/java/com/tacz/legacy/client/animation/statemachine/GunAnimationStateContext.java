@@ -29,6 +29,8 @@ import java.util.function.Function;
  */
 @SuppressWarnings("unused")
 public class GunAnimationStateContext extends ItemAnimationStateContext {
+    private static final String HEAT_AMOUNT_TAG = "HeatAmount";
+
     private ItemStack currentGunItem = ItemStack.EMPTY;
     private @Nullable IGun iGun;
     private @Nullable GunDisplayInstance display;
@@ -65,6 +67,13 @@ public class GunAnimationStateContext extends ItemAnimationStateContext {
             }
             return iGun.hasBulletInBarrel(currentGunItem);
         }).orElse(false);
+    }
+
+    public boolean isOverHeat() {
+        return gunData != null
+                && gunData.getHasHeatData()
+                && iGun != null
+                && iGun.isOverheatLocked(currentGunItem);
     }
 
     public long getShootInterval() {
@@ -187,6 +196,10 @@ public class GunAnimationStateContext extends ItemAnimationStateContext {
         return processCameraEntity(Entity::isSneaking).orElse(false);
     }
 
+    public boolean shouldSlide() {
+        return processCameraEntity(entity -> gunData != null && entity.isSneaking() && gunData.canSlide()).orElse(false);
+    }
+
     public void anchorWalkDist() {
         processCameraEntity(entity -> {
             walkDistAnchor = entity.distanceWalkedModified
@@ -201,6 +214,11 @@ public class GunAnimationStateContext extends ItemAnimationStateContext {
                     + (entity.distanceWalkedModified - entity.prevDistanceWalkedModified) * partialTicks;
             return currentWalkDist - walkDistAnchor;
         }).orElse(0f);
+    }
+
+    public void popShellFrom(int index) {
+        // Legacy 1.12.2 first-person runtime does not yet have upstream shell ejection renderers.
+        // Keep this method exposed so Lua state machines remain script-compatible instead of crashing.
     }
 
     public LuaTable getStateMachineParams() {
@@ -223,8 +241,15 @@ public class GunAnimationStateContext extends ItemAnimationStateContext {
     }
 
     public float getHeatProgress() {
-        // Simplified: heat not fully wired yet
-        return 0f;
+        if (gunData == null || !gunData.getHasHeatData()) {
+            return 0f;
+        }
+        float heatMax = gunData.getHeatMax();
+        if (heatMax <= 0f) {
+            return 0f;
+        }
+        float heatAmount = currentGunItem.hasTagCompound() ? currentGunItem.getTagCompound().getFloat(HEAT_AMOUNT_TAG) : 0f;
+        return MathHelper.clamp(heatAmount / heatMax, 0f, 1f);
     }
 
     /**

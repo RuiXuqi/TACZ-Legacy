@@ -117,6 +117,37 @@ class RuntimeBackedItemPresentationTest {
     }
 
     @Test
+    fun `creative tabs split guns and attachments by upstream type truth`() {
+        withCustomSnapshot {
+            val rifleStacks = NonNullList.create<ItemStack>()
+            LegacyItems.MODERN_KINETIC_GUN.getSubItems(LegacyCreativeTabs.GUN_RIFLE, rifleStacks)
+            assertEquals(listOf(ResourceLocation("demo", "test_rifle")), rifleStacks.map(LegacyItems.MODERN_KINETIC_GUN::getGunId))
+
+            val pistolStacks = NonNullList.create<ItemStack>()
+            LegacyItems.MODERN_KINETIC_GUN.getSubItems(LegacyCreativeTabs.GUN_PISTOL, pistolStacks)
+            assertEquals(listOf(ResourceLocation("demo", "test_pistol")), pistolStacks.map(LegacyItems.MODERN_KINETIC_GUN::getGunId))
+
+            val allGunTabs = LegacyItems.MODERN_KINETIC_GUN.getCreativeTabs().toSet()
+            assertTrue(allGunTabs.contains(LegacyCreativeTabs.GUN_RIFLE))
+            assertTrue(allGunTabs.contains(LegacyCreativeTabs.GUN_PISTOL))
+            assertTrue(allGunTabs.size >= 8)
+
+            val scopeStacks = NonNullList.create<ItemStack>()
+            LegacyItems.ATTACHMENT.getSubItems(LegacyCreativeTabs.ATTACHMENT_SCOPE, scopeStacks)
+            assertEquals(listOf(ResourceLocation("demo", "test_scope")), scopeStacks.map(LegacyItems.ATTACHMENT::getAttachmentId))
+
+            val laserStacks = NonNullList.create<ItemStack>()
+            LegacyItems.ATTACHMENT.getSubItems(LegacyCreativeTabs.ATTACHMENT_LASER, laserStacks)
+            assertEquals(listOf(ResourceLocation("demo", "test_laser")), laserStacks.map(LegacyItems.ATTACHMENT::getAttachmentId))
+
+            val allAttachmentTabs = LegacyItems.ATTACHMENT.getCreativeTabs().toSet()
+            assertTrue(allAttachmentTabs.contains(LegacyCreativeTabs.ATTACHMENT_SCOPE))
+            assertTrue(allAttachmentTabs.contains(LegacyCreativeTabs.ATTACHMENT_LASER))
+            assertTrue(allAttachmentTabs.size >= 7)
+        }
+    }
+
+    @Test
     fun `workbench preview falls back cleanly when no external recipes are loaded`() {
         withDefaultPackSnapshot { snapshot ->
             val blockId = ResourceLocation("tacz", "gun_smith_table")
@@ -169,7 +200,9 @@ class RuntimeBackedItemPresentationTest {
                     {
                       "pack.demo.name": "Demo Pack",
                       "demo.gun.test_rifle.name": "Demo Rifle",
+                                            "demo.gun.test_pistol.name": "Demo Pistol",
                       "demo.attachment.test_scope.name": "Demo Scope",
+                                            "demo.attachment.test_laser.name": "Demo Laser",
                       "demo.block.demo_table.name": "Demo Table",
                       "demo.block.demo_table.desc": "Demo table tooltip",
                       "demo.tab.primary": "Primary"
@@ -193,6 +226,24 @@ class RuntimeBackedItemPresentationTest {
                       "allow_attachment_types": ["scope"]
                     }
                 """.trimIndent())
+                                writeEntry(zip, "data/demo/index/guns/test_pistol.json", """
+                                        {
+                                            "name": "demo.gun.test_pistol.name",
+                                            "display": "demo:test_pistol_display",
+                                            "data": "demo:test_pistol_data",
+                                            "type": "pistol",
+                                            "item_type": "modern_kinetic"
+                                        }
+                                """.trimIndent())
+                                writeEntry(zip, "data/demo/data/guns/test_pistol_data.json", """
+                                        {
+                                            "ammo": "demo:test_round",
+                                            "ammo_amount": 12,
+                                            "rpm": 420,
+                                            "aim_time": 0.1,
+                                            "allow_attachment_types": ["laser"]
+                                        }
+                                """.trimIndent())
                 writeEntry(zip, "data/demo/index/ammo/test_round.json", """
                     {
                       "name": "demo.ammo.test_round.name",
@@ -209,6 +260,15 @@ class RuntimeBackedItemPresentationTest {
                     }
                 """.trimIndent())
                 writeEntry(zip, "data/demo/data/attachments/test_scope_data.json", "{}")
+                                writeEntry(zip, "data/demo/index/attachments/test_laser.json", """
+                                        {
+                                            "name": "demo.attachment.test_laser.name",
+                                            "display": "demo:test_laser_display",
+                                            "data": "demo:test_laser_data",
+                                            "type": "laser"
+                                        }
+                                """.trimIndent())
+                                writeEntry(zip, "data/demo/data/attachments/test_laser_data.json", "{}")
                 writeEntry(zip, "data/demo/index/blocks/demo_table.json", """
                     {
                       "name": "demo.block.demo_table.name",
@@ -252,9 +312,14 @@ class RuntimeBackedItemPresentationTest {
                 writeEntry(zip, "data/demo/tacz_tags/allow_attachments/test_rifle.json", """
                     ["demo:test_scope"]
                 """.trimIndent())
+                writeEntry(zip, "data/demo/tacz_tags/allow_attachments/test_pistol.json", """
+                    ["demo:test_laser"]
+                """.trimIndent())
                 writeEntry(zip, "assets/demo/display/guns/test_rifle_display.json", "{}")
+                writeEntry(zip, "assets/demo/display/guns/test_pistol_display.json", "{}")
                 writeEntry(zip, "assets/demo/display/ammo/test_round_display.json", "{}")
                 writeEntry(zip, "assets/demo/display/attachments/test_scope_display.json", "{}")
+                writeEntry(zip, "assets/demo/display/attachments/test_laser_display.json", "{}")
                 writeEntry(zip, "assets/demo/display/blocks/demo_table_display.json", "{}")
             }
         }

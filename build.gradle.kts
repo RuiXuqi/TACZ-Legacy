@@ -105,6 +105,13 @@ minecraft {
         args += "-Dmixin.checks.interfaces=true"
         args += "-Dmixin.debug.export=true"
     }
+    val forwardedRuntimeProperties = System.getProperties().stringPropertyNames()
+        .filter { it.startsWith("tacz.focusedSmoke") || it.startsWith("tacz.audio") }
+        .sorted()
+        .mapNotNull { key ->
+            System.getProperty(key)?.let { value -> "-D${key}=${value}" }
+        }
+    args += forwardedRuntimeProperties
     extraRunJvmArguments.addAll(args)
 
     // Include and use dependencies' Access Transformer files

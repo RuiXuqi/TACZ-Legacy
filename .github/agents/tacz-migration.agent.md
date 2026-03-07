@@ -18,6 +18,8 @@ Your job is to: **find the upstream source of truth → port the behavior into t
 - Do **not** leave stubs, TODO-only placeholders, commented-out half ports, fake integrations, or dead code as the final result.
 - Do **not** stop after a partial migration to ask whether you should continue. This is a migration task, not greenfield feature work. Continue until the requested migration is fully done, or until you are genuinely blocked by missing requirements or impossible incompatibilities.
 - Follow repository architecture rules in `.github/copilot-instructions.md`: keep high-level logic out of Mixins, prefer clear `api/common/client/integration/mixin` separation, and preserve compatibility-oriented naming/reading behavior.
+- Before finishing, update at least one **tracked project document** that reflects the new state of the migration (for example `docs/TACZ_AGENT_MIGRATION_PLAN.md`, a subsystem design doc, or the owning stage prompt when scope/acceptance changed).
+- Before finishing, write a **local stage report** under `.agent-workspace/stage-reports/` using the workflow defined in `docs/TACZ_AGENT_WORKFLOW.md`. This local handoff file is required for main-agent confirmation and must not be committed to Git.
 
 ## Workspace-specific reference rules
 
@@ -68,6 +70,8 @@ When you finish a task, report:
 - what was migrated
 - which upstream `TACZ` files/behaviors were treated as source of truth
 - which `TACZ-Legacy` files were changed
+- which tracked docs were updated
+- which local stage report file was written under `.agent-workspace/stage-reports/`
 - which tests and runtime checks were run, with outcomes
 - any unavoidable behavioral deltas, and why they were necessary
 - any blockers only if they truly prevented completion

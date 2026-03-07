@@ -48,6 +48,8 @@ class TACZGunPackRuntimeTest {
             val snapshot = TACZGunPackRuntimeRegistry.reload(gameDir)
             val gunId = ResourceLocation("demo", "test_rifle")
             val attachmentId = ResourceLocation("demo", "test_scope")
+            val gunDisplayId = ResourceLocation("demo", "test_rifle_display")
+            val attachmentDisplayId = ResourceLocation("demo", "test_scope_display")
 
             assertEquals(1, snapshot.packs.size)
             assertTrue(snapshot.packInfos.containsKey("demo"))
@@ -56,6 +58,17 @@ class TACZGunPackRuntimeTest {
             assertEquals(1, snapshot.ammos.size)
             assertTrue(snapshot.attachments.getValue(attachmentId).data.modifiers.containsKey("ads"))
             assertTrue(snapshot.attachments.getValue(attachmentId).data.modifiers.containsKey("recoil"))
+            assertTrue(snapshot.gunDisplays.containsKey(gunDisplayId))
+            assertTrue(snapshot.attachmentDisplays.containsKey(attachmentDisplayId))
+            assertEquals("rifle", snapshot.gunDisplays.getValue(gunDisplayId).raw.get("use_default_animation").asString)
+            assertEquals(0.75f, snapshot.gunDisplays.getValue(gunDisplayId).raw.getAsJsonObject("muzzle_flash").get("scale").asFloat, 0.001f)
+            assertEquals("scope_adapter", snapshot.attachmentDisplays.getValue(attachmentDisplayId).raw.get("adapter").asString)
+            assertEquals(2, snapshot.attachmentDisplays.getValue(attachmentDisplayId).raw.getAsJsonArray("views").size())
+
+            val runtimeGunData = requireNotNull(GunDataAccessor.getGunData(gunId))
+            val explosion = requireNotNull(runtimeGunData.bulletData.explosionData)
+            assertTrue(explosion.explode)
+            assertTrue(explosion.destroyBlock)
         } finally {
             TACZGunPackRuntimeRegistry.clearForTests()
             gameDir.deleteRecursively()
@@ -92,11 +105,48 @@ class TACZGunPackRuntimeTest {
                       "ammo": "demo:test_round",
                       "ammo_amount": 30,
                       "rpm": 600,
+                                            "bullet": {
+                                                "damage": 12,
+                                                "speed": 90,
+                                                "explosion": {
+                                                    "explode": true,
+                                                    "damage": 40,
+                                                    "radius": 2,
+                                                    "knockback": true,
+                                                    "destroy_block": true,
+                                                    "delay": 15
+                                                }
+                                            },
                       "weight": 3.1,
                       "aim_time": 0.15,
                       "allow_attachment_types": ["scope"]
                     }
                 """.trimIndent())
+                                writeEntry(zip, "assets/demo/display/guns/test_rifle_display.json", """
+                                        {
+                                            "model": "demo:gun/model/test_rifle_geo",
+                                            "texture": "demo:gun/uv/test_rifle",
+                                            "animation": "demo:test_rifle_anim",
+                                            "state_machine": "demo:test_rifle_state_machine",
+                                            "use_default_animation": "rifle",
+                                            "default_animation": "demo:common/rifle_default",
+                                            "player_animator_3rd": "demo:rifle_default.player_animation",
+                                            "muzzle_flash": {
+                                                "texture": "demo:flash/common_muzzle_flash",
+                                                "scale": 0.75
+                                            },
+                                            "shell": {
+                                                "initial_velocity": [5, 2, 1],
+                                                "random_velocity": [1, 1, 0.25],
+                                                "acceleration": [0, -10, 0],
+                                                "angular_velocity": [360, -1200, 90],
+                                                "living_time": 1.0
+                                            },
+                                            "ammo": {
+                                                "tracer_color": "#FF8888"
+                                            }
+                                        }
+                                """.trimIndent())
                 writeEntry(zip, "data/demo/index/attachments/test_scope.json", """
                     {
                       "name": "demo.attachment.test_scope.name",
@@ -116,6 +166,21 @@ class TACZGunPackRuntimeTest {
                       }
                     }
                 """.trimIndent())
+                                writeEntry(zip, "assets/demo/display/attachments/test_scope_display.json", """
+                                        {
+                                            "slot": "demo:attachment/slot/test_scope",
+                                            "model": "demo:attachment/model/test_scope_geo",
+                                            "texture": "demo:attachment/uv/test_scope",
+                                            "adapter": "scope_adapter",
+                                            "show_muzzle": true,
+                                            "zoom": [2.0, 4.0],
+                                            "views": [1, 4],
+                                            "scope": true,
+                                            "sight": true,
+                                            "fov": 55,
+                                            "views_fov": [60.0, 40.0]
+                                        }
+                                """.trimIndent())
                 writeEntry(zip, "data/demo/index/ammo/test_round.json", """
                     {
                       "name": "demo.ammo.test_round.name",

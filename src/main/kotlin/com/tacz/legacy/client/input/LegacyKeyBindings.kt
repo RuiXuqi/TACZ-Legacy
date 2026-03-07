@@ -14,8 +14,10 @@ internal object LegacyKeyBindings {
     internal val AIM: KeyBinding = KeyBinding("key.tacz.aim.desc", KeyConflictContext.IN_GAME, MOUSE_RIGHT, CATEGORY)
     internal val RELOAD: KeyBinding = KeyBinding("key.tacz.reload.desc", KeyConflictContext.IN_GAME, Keyboard.KEY_R, CATEGORY)
     internal val FIRE_SELECT: KeyBinding = KeyBinding("key.tacz.fire_select.desc", KeyConflictContext.IN_GAME, Keyboard.KEY_G, CATEGORY)
+    internal val INSPECT: KeyBinding = KeyBinding("key.tacz.inspect.desc", KeyConflictContext.IN_GAME, Keyboard.KEY_H, CATEGORY)
     internal val MELEE: KeyBinding = KeyBinding("key.tacz.melee.desc", KeyConflictContext.IN_GAME, Keyboard.KEY_V, CATEGORY)
     internal val INTERACT: KeyBinding = KeyBinding("key.tacz.interact.desc", KeyConflictContext.IN_GAME, Keyboard.KEY_O, CATEGORY)
+    internal val REFIT: KeyBinding = KeyBinding("key.tacz.refit.desc", KeyConflictContext.IN_GAME, Keyboard.KEY_Z, CATEGORY)
 
     private var registered: Boolean = false
 
@@ -28,7 +30,9 @@ internal object LegacyKeyBindings {
         ClientRegistry.registerKeyBinding(AIM)
         ClientRegistry.registerKeyBinding(RELOAD)
         ClientRegistry.registerKeyBinding(FIRE_SELECT)
+        ClientRegistry.registerKeyBinding(INSPECT)
         ClientRegistry.registerKeyBinding(MELEE)
         ClientRegistry.registerKeyBinding(INTERACT)
+        ClientRegistry.registerKeyBinding(REFIT)
     }
 }

@@ -1,6 +1,7 @@
 package com.tacz.legacy.client.gui
 
 import com.tacz.legacy.TACZLegacy
+import com.tacz.legacy.common.application.refit.LegacyGunRefitRuntime
 import com.tacz.legacy.common.application.gunsmith.LegacyGunSmithIngredient
 import com.tacz.legacy.common.application.gunsmith.LegacyGunSmithRecipe
 import com.tacz.legacy.common.application.gunsmith.LegacyGunSmithTab
@@ -19,14 +20,12 @@ import net.minecraft.client.resources.I18n
 import net.minecraft.entity.player.InventoryPlayer
 import net.minecraft.item.ItemStack
 import net.minecraft.util.ResourceLocation
-import net.minecraft.util.text.TextFormatting
 import net.minecraftforge.fml.relauncher.Side
 import net.minecraftforge.fml.relauncher.SideOnly
 import org.lwjgl.input.Keyboard
 import org.lwjgl.input.Mouse
 import java.awt.Desktop
 import java.net.URI
-import java.util.Locale
 
 @SideOnly(Side.CLIENT)
 internal class GunSmithTableScreen(
@@ -130,6 +129,7 @@ internal class GunSmithTableScreen(
                 initGui()
             }
             button.id == BUTTON_CRAFT -> tryCraft()
+            button.id == BUTTON_REFIT -> openRefitScreenFromWorkbench()
             button.id == BUTTON_TYPE_PREV -> {
                 if (typePage > 0) {
                     typePage--
@@ -235,6 +235,9 @@ internal class GunSmithTableScreen(
         drawDefaultBackground()
         super.drawScreen(mouseX, mouseY, partialTicks)
         searchField.drawTextBox()
+        if (searchField.text.isEmpty() && !searchField.isFocused) {
+            fontRenderer.drawString(I18n.format("gui.tacz.gun_smith_table.filter.search"), guiLeft + 10, guiTop + 23, 0x7F7F7F)
+        }
         renderHoveredTooltips(mouseX, mouseY)
     }
 
@@ -246,7 +249,7 @@ internal class GunSmithTableScreen(
         drawTexturedModalRect(guiLeft + 136, guiTop + 27, 0, 0, 208, 160)
 
         if (!filterPanelVisible) {
-            renderPreviewItem()
+            renderPreviewItem(mouseX, mouseY)
             renderPackInfo()
         } else {
             drawPackFilterPanel()
@@ -262,10 +265,10 @@ internal class GunSmithTableScreen(
             }
         }
         fontRenderer.drawString(I18n.format("gui.tacz.gun_smith_table.ingredient"), 254, 50, TITLE_COLOR)
-        fontRenderer.drawString(I18n.format("gui.tacz.gun_smith_table.craft"), 296, 167, 0xFFFFFF)
+        drawCenteredString(fontRenderer, I18n.format("gui.tacz.gun_smith_table.craft"), 312, 167, 0xFFFFFF)
 
         if (selectedRecipe == null) {
-            fontRenderer.drawString(NO_RECIPE_TEXT, 151, 67, 0xAA4444)
+            fontRenderer.drawString(I18n.format("gui.tacz.gun_smith_table.no_matching_recipes"), 151, 67, 0xAA4444)
         } else if (!filterPanelVisible) {
             fontRenderer.drawString(
                 I18n.format("gui.tacz.gun_smith_table.count", selectedRecipe!!.result.count),
@@ -328,39 +331,64 @@ internal class GunSmithTableScreen(
         tabButtons.clear()
         resultButtons.clear()
 
-        addButton(GuiButton(BUTTON_FILTER, guiLeft - 10, guiTop, 12, 12, "F"))
-        addButton(GuiButton(BUTTON_TYPE_PREV, guiLeft + 136, guiTop + 3, 18, 20, "<"))
-        addButton(GuiButton(BUTTON_TYPE_NEXT, guiLeft + 327, guiTop + 3, 18, 20, ">"))
-        addButton(GuiButton(BUTTON_RESULT_PREV, guiLeft + 143, guiTop + 55, 44, 12, "˄"))
-        addButton(GuiButton(BUTTON_RESULT_NEXT, guiLeft + 193, guiTop + 55, 44, 12, "˅"))
-        addButton(GuiButton(BUTTON_CRAFT, guiLeft + 289, guiTop + 160, 48, 20, I18n.format("gui.tacz.gun_smith_table.craft")))
+        addButton(FlatButton(BUTTON_FILTER, guiLeft - 10, guiTop, 12, 12, "F", tooltipLines = listOf(I18n.format("gui.tacz.gun_smith_table.filter"))))
+        addButton(TexturedButton(BUTTON_TYPE_PREV, guiLeft + 136, guiTop + 4, 18, 20, 0, 162, tooltipLines = listOf(I18n.format("tooltip.tacz.page.previous"))))
+        addButton(TexturedButton(BUTTON_TYPE_NEXT, guiLeft + 327, guiTop + 4, 18, 20, 20, 162, tooltipLines = listOf(I18n.format("tooltip.tacz.page.next"))))
+        addButton(TexturedButton(BUTTON_RESULT_PREV, guiLeft + 143, guiTop + 56, 96, 6, 40, 166, tooltipLines = listOf(I18n.format("tooltip.tacz.page.previous"))))
+        addButton(TexturedButton(BUTTON_RESULT_NEXT, guiLeft + 143, guiTop + 171, 96, 6, 40, 186, tooltipLines = listOf(I18n.format("tooltip.tacz.page.next"))))
+        addButton(TexturedButton(BUTTON_CRAFT, guiLeft + 289, guiTop + 162, 48, 18, 138, 164))
 
         if (filterPanelVisible) {
-            addButton(GuiButton(BUTTON_BY_HAND, guiLeft + 6, guiTop + 40, 58, 14, toggleLabel("By hand", byHandOnly)))
             addButton(
-                GuiButton(
+                FlatButton(
+                    BUTTON_BY_HAND,
+                    guiLeft + 6,
+                    guiTop + 40,
+                    58,
+                    14,
+                    I18n.format("gui.tacz.gun_smith_table.filter.handgun"),
+                    selected = byHandOnly,
+                ),
+            )
+            addButton(
+                FlatButton(
                     BUTTON_SELECT_ALL,
                     guiLeft + 68,
                     guiTop + 40,
                     60,
                     14,
-                    if (selectedNamespaces.size == allNamespaces.size) "Clear" else "All",
+                    if (selectedNamespaces.size == allNamespaces.size) {
+                        I18n.format("gui.tacz.gun_smith_table.filter.clear")
+                    } else {
+                        I18n.format("gui.tacz.gun_smith_table.filter.all")
+                    },
                 ),
             )
             if (allNamespaces.size > PACKS_PER_PAGE) {
-                addButton(GuiButton(BUTTON_PACK_PREV, guiLeft + 6, guiTop + 56, 20, 12, "<"))
-                addButton(GuiButton(BUTTON_PACK_NEXT, guiLeft + 108, guiTop + 56, 20, 12, ">"))
+                addButton(FlatButton(BUTTON_PACK_PREV, guiLeft + 6, guiTop + 56, 20, 12, "<", tooltipLines = listOf(I18n.format("tooltip.tacz.page.previous"))))
+                addButton(FlatButton(BUTTON_PACK_NEXT, guiLeft + 108, guiTop + 56, 20, 12, ">", tooltipLines = listOf(I18n.format("tooltip.tacz.page.next"))))
             }
             addPackButtons()
         } else {
-            addButton(GuiButton(BUTTON_SCALE_UP, guiLeft + 5, guiTop + 5, 14, 14, "+"))
-            addButton(GuiButton(BUTTON_SCALE_DOWN, guiLeft + 21, guiTop + 5, 14, 14, "-"))
-            addButton(GuiButton(BUTTON_SCALE_RESET, guiLeft + 37, guiTop + 5, 18, 14, "R"))
+            addButton(TexturedButton(BUTTON_SCALE_UP, guiLeft + 5, guiTop + 5, 10, 10, 188, 173, tooltipLines = listOf(I18n.format("gui.tacz.gun_smith_table.scale.increase"))))
+            addButton(TexturedButton(BUTTON_SCALE_DOWN, guiLeft + 17, guiTop + 5, 10, 10, 200, 173, tooltipLines = listOf(I18n.format("gui.tacz.gun_smith_table.scale.decrease"))))
+            addButton(TexturedButton(BUTTON_SCALE_RESET, guiLeft + 29, guiTop + 5, 10, 10, 212, 173, tooltipLines = listOf(I18n.format("gui.tacz.gun_smith_table.scale.reset"))))
+            val refitButton = FlatButton(
+                BUTTON_REFIT,
+                guiLeft + 6,
+                guiTop + 162,
+                102,
+                18,
+                I18n.format("gui.tacz.gun_smith_table.refit"),
+                tooltipLines = refitTooltipLines(),
+            )
+            refitButton.enabled = canOpenHeldGunRefit()
+            addButton(refitButton)
             val hasUrl = selectedRecipe?.let { recipe ->
                 TACZGunPackRuntimeRegistry.getSnapshot().packInfos[recipe.sourceNamespace]?.url?.isNotBlank() == true
             } ?: false
             if (hasUrl) {
-                addButton(GuiButton(BUTTON_URL, guiLeft + 103, guiTop + 164, 26, 18, "URL"))
+                addButton(TexturedButton(BUTTON_URL, guiLeft + 112, guiTop + 164, 18, 18, 149, 211, tooltipLines = listOf(I18n.format("gui.tacz.gun_smith_table.pack_url"))))
             }
         }
 
@@ -396,13 +424,14 @@ internal class GunSmithTableScreen(
         visibleNamespaces.forEachIndexed { index, namespace ->
             val packName = namespaceDisplayName(namespace)
             addButton(
-                GuiButton(
+                FlatButton(
                     BUTTON_PACK_BASE + index,
                     guiLeft + 6,
                     guiTop + 70 + 14 * index,
                     122,
                     12,
-                    toggleLabel(packName, namespace in selectedNamespaces),
+                    packName,
+                    selected = namespace in selectedNamespaces,
                 ),
             )
         }
@@ -438,8 +467,23 @@ internal class GunSmithTableScreen(
         mc.displayGuiScreen(GuiConfirmOpenLink(this, url, URL_CONFIRM_ID, false))
     }
 
-    private fun renderPreviewItem() {
+    private fun renderPreviewItem(mouseX: Int, mouseY: Int) {
         val recipe = selectedRecipe ?: return
+        val centerX = guiLeft + 68.0f
+        val centerY = guiTop + 92.0f
+        val previewYaw = -26.0f + ((centerX - mouseX) * 0.08f).coerceIn(-20.0f, 20.0f)
+        val previewPitch = 12.0f + ((centerY - mouseY) * 0.05f).coerceIn(-12.0f, 12.0f)
+        val rendered = TACZGuiModelPreviewRenderer.renderStackPreview(
+            stack = recipe.result,
+            centerX = centerX,
+            centerY = centerY,
+            scale = previewScale / 2.0f,
+            yaw = previewYaw,
+            pitch = previewPitch,
+        )
+        if (rendered) {
+            return
+        }
         val scale = previewScale / 20f
         GlStateManager.pushMatrix()
         GlStateManager.translate((guiLeft + 60).toFloat(), (guiTop + 60).toFloat(), 250f)
@@ -449,6 +493,29 @@ internal class GunSmithTableScreen(
         itemRender.renderItemOverlayIntoGUI(fontRenderer, recipe.result, -8, -8, null)
         RenderHelper.disableStandardItemLighting()
         GlStateManager.popMatrix()
+    }
+
+    private fun canOpenHeldGunRefit(): Boolean {
+        val player = mc.player ?: return false
+        return LegacyGunRefitRuntime.canOpenRefit(player.heldItemMainhand)
+    }
+
+    private fun openRefitScreenFromWorkbench() {
+        if (!canOpenHeldGunRefit()) {
+            return
+        }
+        mc.player?.closeScreen()
+        mc.addScheduledTask {
+            mc.displayGuiScreen(GunRefitScreen())
+        }
+    }
+
+    private fun refitTooltipLines(): List<String> {
+        return if (canOpenHeldGunRefit()) {
+            listOf(I18n.format("gui.tacz.gun_smith_table.refit"))
+        } else {
+            listOf(I18n.format("gui.tacz.gun_smith_table.refit.unavailable"))
+        }
     }
 
     private fun renderPackInfo() {
@@ -498,7 +565,7 @@ internal class GunSmithTableScreen(
     }
 
     private fun drawPackFilterPanel() {
-        drawRect(guiLeft + 4, guiTop + 18, guiLeft + 130, guiTop + 180, 0x44000000)
+        drawPanel(guiLeft + 4, guiTop + 18, guiLeft + 130, guiTop + 180)
     }
 
     private fun renderIngredients() {
@@ -530,6 +597,13 @@ internal class GunSmithTableScreen(
             drawHoveringText(listOf(button.tab.displayName), mouseX, mouseY)
             return
         }
+        buttonList.asSequence()
+            .filterIsInstance<HoverTooltipButton>()
+            .firstOrNull { it.isMouseOver(mouseX, mouseY) && it.tooltipLines.isNotEmpty() }
+            ?.let { button ->
+                drawHoveringText(button.tooltipLines, mouseX, mouseY)
+                return
+            }
         resultButtons.firstOrNull { it.isMouseOver(mouseX, mouseY) }?.let { button ->
             renderToolTip(button.recipe.result, mouseX, mouseY)
             return
@@ -544,7 +618,7 @@ internal class GunSmithTableScreen(
                 if (stacks.isNotEmpty()) {
                     renderToolTip(stacks.first(), mouseX, mouseY)
                 } else {
-                    drawHoveringText(listOf("Missing tag ingredient"), mouseX, mouseY)
+                    drawHoveringText(listOf(I18n.format("gui.tacz.gun_smith_table.missing_ingredient")), mouseX, mouseY)
                 }
                 return
             }
@@ -584,7 +658,78 @@ internal class GunSmithTableScreen(
             ?: namespace
     }
 
-    private fun toggleLabel(label: String, selected: Boolean): String = if (selected) "§a✓ §r$label" else "§7☐ §r$label"
+    private fun drawPanel(left: Int, top: Int, right: Int, bottom: Int, fillColor: Int = 0x7A161616.toInt()) {
+        drawRect(left, top, right, bottom, fillColor)
+        drawHorizontalLine(left, right - 1, top, 0xFFF3EFE0.toInt())
+        drawHorizontalLine(left, right - 1, bottom - 1, 0xAA4A4A4A.toInt())
+        drawVerticalLine(left, top, bottom - 1, 0xFFF3EFE0.toInt())
+        drawVerticalLine(right - 1, top, bottom - 1, 0xAA4A4A4A.toInt())
+    }
+
+    private interface HoverTooltipButton {
+        val tooltipLines: List<String>
+        fun isMouseOver(mouseX: Int, mouseY: Int): Boolean
+    }
+
+    private inner class FlatButton(
+        id: Int,
+        x: Int,
+        y: Int,
+        width: Int,
+        height: Int,
+        displayString: String,
+        private val selected: Boolean = false,
+        override val tooltipLines: List<String> = emptyList(),
+    ) : GuiButton(id, x, y, width, height, displayString), HoverTooltipButton {
+        override fun drawButton(mc: net.minecraft.client.Minecraft, mouseX: Int, mouseY: Int, partialTicks: Float) {
+            if (!visible) {
+                return
+            }
+            hovered = isMouseOver(mouseX, mouseY)
+            val fill = when {
+                selected -> 0xAF303030.toInt()
+                hovered -> 0xAF2A2A2A.toInt()
+                else -> 0xAF222222.toInt()
+            }
+            drawRect(x, y, x + width, y + height, fill)
+            val border = if (hovered || selected) 0xFFF3EFE0.toInt() else 0xFF5A5A5A.toInt()
+            drawHorizontalLine(x, x + width - 1, y, border)
+            drawHorizontalLine(x, x + width - 1, y + height - 1, border)
+            drawVerticalLine(x, y, y + height - 1, border)
+            drawVerticalLine(x + width - 1, y, y + height - 1, border)
+            val textColor = if (enabled) 0xF3EFE0 else 0x777777
+            drawCenteredString(fontRenderer, displayString, x + width / 2, y + (height - 8) / 2, textColor)
+        }
+
+        override fun isMouseOver(mouseX: Int, mouseY: Int): Boolean = mouseX >= x && mouseY >= y && mouseX < x + width && mouseY < y + height
+    }
+
+    private inner class TexturedButton(
+        id: Int,
+        x: Int,
+        y: Int,
+        width: Int,
+        height: Int,
+        private val u: Int,
+        private val v: Int,
+        override val tooltipLines: List<String> = emptyList(),
+    ) : GuiButton(id, x, y, width, height, ""), HoverTooltipButton {
+        override fun drawButton(mc: net.minecraft.client.Minecraft, mouseX: Int, mouseY: Int, partialTicks: Float) {
+            if (!visible) {
+                return
+            }
+            hovered = isMouseOver(mouseX, mouseY)
+            mc.textureManager.bindTexture(TEXTURE)
+            GlStateManager.color(1f, 1f, 1f, 1f)
+            if (hovered) {
+                drawTexturedModalRect(x - 1, y - 1, (u - 1).coerceAtLeast(0), (v - 1).coerceAtLeast(0), width + 2, height + 2)
+            } else {
+                drawTexturedModalRect(x, y, u, v, width, height)
+            }
+        }
+
+        override fun isMouseOver(mouseX: Int, mouseY: Int): Boolean = mouseX >= x && mouseY >= y && mouseX < x + width && mouseY < y + height
+    }
 
     private inner class TabButton(
         id: Int,
@@ -592,20 +737,18 @@ internal class GunSmithTableScreen(
         y: Int,
         val tab: LegacyGunSmithTab,
         private val selected: Boolean,
-    ) : GuiButton(id, x, y, 22, 20, "") {
+    ) : GuiButton(id, x, y, 24, 25, "") {
         override fun drawButton(mc: net.minecraft.client.Minecraft, mouseX: Int, mouseY: Int, partialTicks: Float) {
             if (!visible) {
                 return
             }
             hovered = isMouseOver(mouseX, mouseY)
-            val bg = when {
-                selected -> 0xAA8C6B3B.toInt()
-                hovered -> 0xAA555555.toInt()
-                else -> 0x66333333
-            }
-            drawRect(x, y, x + width, y + height, bg)
+            mc.textureManager.bindTexture(TEXTURE)
+            val vOffset = if (hovered) 204 + height else 204
+            val uOffset = if (selected) 0 else 26
+            drawTexturedModalRect(x, y, uOffset, vOffset, width, height)
             RenderHelper.enableGUIStandardItemLighting()
-            itemRender.renderItemAndEffectIntoGUI(tab.icon, x + 3, y + 2)
+            itemRender.renderItemAndEffectIntoGUI(tab.icon, x + 4, y + 5)
             RenderHelper.disableStandardItemLighting()
         }
 
@@ -624,12 +767,13 @@ internal class GunSmithTableScreen(
                 return
             }
             hovered = isMouseOver(mouseX, mouseY)
-            val bg = when {
-                selected -> 0xAA7E6140.toInt()
-                hovered -> 0xAA4B4B4B.toInt()
-                else -> 0x66333333
+            mc.textureManager.bindTexture(TEXTURE)
+            when {
+                selected && hovered -> drawTexturedModalRect(x - 1, y - 1, 52, 229, width + 2, height + 2)
+                selected -> drawTexturedModalRect(x, y, 53, 230, width, height)
+                hovered -> drawTexturedModalRect(x - 1, y - 1, 52, 211, width + 2, height + 2)
+                else -> drawTexturedModalRect(x, y, 53, 212, width, height)
             }
-            drawRect(x, y, x + width, y + height, bg)
             RenderHelper.enableGUIStandardItemLighting()
             itemRender.renderItemAndEffectIntoGUI(recipe.result, x + 1, y)
             RenderHelper.disableStandardItemLighting()
@@ -663,6 +807,7 @@ internal class GunSmithTableScreen(
         const val BUTTON_URL: Int = 12
         const val BUTTON_PACK_PREV: Int = 13
         const val BUTTON_PACK_NEXT: Int = 14
+        const val BUTTON_REFIT: Int = 15
         const val BUTTON_TAB_BASE: Int = 1000
         const val BUTTON_RESULT_BASE: Int = 2000
         const val BUTTON_PACK_BASE: Int = 3000
@@ -671,6 +816,5 @@ internal class GunSmithTableScreen(
         const val RESULTS_PER_PAGE: Int = 6
         const val PACKS_PER_PAGE: Int = 7
         const val MAX_INGREDIENTS: Int = 12
-        const val NO_RECIPE_TEXT: String = "No matching recipes"
     }
 }

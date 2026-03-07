@@ -1,6 +1,7 @@
 package com.tacz.legacy.common.network.message.event
 
 import com.tacz.legacy.TACZLegacy
+import com.tacz.legacy.client.gameplay.LegacyClientShootCoordinator
 import com.tacz.legacy.common.network.TACZNetworkHandler
 import com.tacz.legacy.common.network.message.client.ClientMessageSyncBaseTimestamp
 import io.netty.buffer.ByteBuf
@@ -29,6 +30,7 @@ public class ServerMessageSyncBaseTimestamp : IMessage {
                 val player = mc.player ?: return@addScheduledTask
                 val operator = com.tacz.legacy.api.entity.IGunOperator.fromLivingEntity(player)
                 operator.getDataHolder().baseTimestamp = receiveTimestamp
+                LegacyClientShootCoordinator.resetTiming()
                 TACZLegacy.logger.debug("Sync client baseTimestamp: {}", receiveTimestamp)
             }
             // 立即回复确认（在网络线程上）

@@ -32,6 +32,8 @@ public object TACZLegacy {
     @JvmField
     internal var logger: Logger = LogManager.getLogger(MOD_ID)
 
+    public fun getLogger(): Logger = logger
+
     @JvmStatic
     @SidedProxy(
         clientSide = "com.tacz.legacy.client.ClientProxy",

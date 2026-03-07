@@ -1,10 +1,12 @@
 package com.tacz.legacy.client.renderer.item
 
 import com.tacz.legacy.api.item.IGun
+import com.tacz.legacy.client.model.BedrockGunModel
 import com.tacz.legacy.client.model.SlotModel
 import com.tacz.legacy.client.model.TACZPerspectiveAwareBakedModel
 import com.tacz.legacy.client.model.bedrock.BedrockModel
 import com.tacz.legacy.client.resource.TACZClientAssetManager
+import com.tacz.legacy.client.resource.GunDisplayInstance
 import com.tacz.legacy.client.resource.pojo.display.gun.GunDisplay
 import com.tacz.legacy.client.resource.pojo.display.gun.GunTransform
 import com.tacz.legacy.common.resource.TACZGunPackPresentation
@@ -44,14 +46,14 @@ internal object TACZGunItemRenderer : TileEntityItemStackRenderer() {
 
         val displayId = TACZGunPackPresentation.resolveGunDisplayId(snapshot, gunId) ?: return
         val display: GunDisplay = TACZClientAssetManager.getGunDisplay(displayId) ?: return
+        val displayInstance = TACZClientAssetManager.getGunDisplayInstance(displayId)
 
         val transformType = TACZPerspectiveAwareBakedModel.getCurrentTransformType()
 
-        // First person is handled by FirstPersonRenderGunEvent
-        if (transformType == ItemCameraTransforms.TransformType.FIRST_PERSON_LEFT_HAND ||
-            transformType == ItemCameraTransforms.TransformType.FIRST_PERSON_RIGHT_HAND) {
-            return
-        }
+        // First person is usually handled by FirstPersonRenderGunEvent.
+        // If that hook bails out early (missing display instance, texture, etc.),
+        // allow the TEISR to act as a last-resort visual fallback instead of
+        // making the gun disappear entirely.
 
         // Third person left hand — skip per upstream convention
         if (transformType == ItemCameraTransforms.TransformType.THIRD_PERSON_LEFT_HAND) {
@@ -65,7 +67,7 @@ internal object TACZGunItemRenderer : TileEntityItemStackRenderer() {
         }
 
         // Third person right hand → 3D model
-        renderGunModel(display)
+        renderGunModel(stack, display, displayInstance)
     }
 
     private fun renderSlotTexture(display: GunDisplay) {
@@ -94,13 +96,18 @@ internal object TACZGunItemRenderer : TileEntityItemStackRenderer() {
         GlStateManager.popMatrix()
     }
 
-    private fun renderGunModel(display: GunDisplay) {
-        val modelLocation: ResourceLocation = display.modelLocation ?: return
-        val modelData = TACZClientAssetManager.getModel(modelLocation) ?: return
-        val model = BedrockModel(modelData.pojo, modelData.version)
-
-        val textureLocation: ResourceLocation = display.modelTexture ?: return
+    private fun renderGunModel(stack: ItemStack, display: GunDisplay, displayInstance: GunDisplayInstance?) {
+        val textureLocation: ResourceLocation = displayInstance?.modelTexture ?: display.modelTexture ?: return
         val registeredTexture: ResourceLocation = TACZClientAssetManager.getTextureLocation(textureLocation) ?: return
+
+        val runtimeModel = displayInstance?.gunModel
+        val fallbackModel = if (runtimeModel == null) {
+            val modelLocation: ResourceLocation = display.modelLocation ?: return
+            val modelData = TACZClientAssetManager.getModel(modelLocation) ?: return
+            BedrockModel(modelData.pojo, modelData.version)
+        } else {
+            null
+        }
 
         Minecraft.getMinecraft().textureManager.bindTexture(registeredTexture)
 
@@ -118,7 +125,15 @@ internal object TACZGunItemRenderer : TileEntityItemStackRenderer() {
             GlStateManager.DestFactor.ZERO,
         )
 
-        model.render()
+        displayInstance?.setActiveGunTexture(registeredTexture)
+        if (runtimeModel != null) {
+            runtimeModel.renderHand = false
+            runtimeModel.render(stack)
+            runtimeModel.cleanAnimationTransform()
+            runtimeModel.cleanCameraAnimationTransform()
+        } else {
+            fallbackModel?.render()
+        }
 
         GlStateManager.disableBlend()
         GlStateManager.disableRescaleNormal()

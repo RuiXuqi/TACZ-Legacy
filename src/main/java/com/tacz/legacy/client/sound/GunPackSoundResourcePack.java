@@ -45,10 +45,25 @@ public final class GunPackSoundResourcePack implements IResourcePack {
 
     @SuppressWarnings("deprecation")
     public static synchronized void installOrUpdate(Set<ResourceLocation> soundResources) {
+        synchronize(soundResources, true);
+    }
+
+    @SuppressWarnings("deprecation")
+    public static synchronized void synchronize(Set<ResourceLocation> soundResources, boolean enabled) {
         Minecraft minecraft = Minecraft.getMinecraft();
         if (minecraft == null) {
             return;
         }
+        if (!enabled) {
+            INSTANCE.resourceDomains = Collections.emptySet();
+            boolean removed = removeInstalled(minecraft);
+            if (removed) {
+                TACZLegacy.logger.info("Refreshing resources after disabling gun pack sound bridge");
+                minecraft.refreshResources();
+            }
+            return;
+        }
+
         LinkedHashSet<String> newDomains = new LinkedHashSet<>();
         for (ResourceLocation soundId : soundResources) {
             newDomains.add(soundId.getNamespace());
@@ -77,8 +92,27 @@ public final class GunPackSoundResourcePack implements IResourcePack {
         }
     }
 
+    @SuppressWarnings("unchecked")
+    private static boolean removeInstalled(Minecraft minecraft) {
+        try {
+            List<IResourcePack> defaultResourcePacks = (List<IResourcePack>) DEFAULT_RESOURCE_PACKS_FIELD.get(minecraft);
+            return defaultResourcePacks.remove(INSTANCE);
+        } catch (IllegalAccessException e) {
+            throw new IllegalStateException("Unable to remove gun pack sound resource pack", e);
+        }
+    }
+
+    private ResourceLocation redirectSoundPath(ResourceLocation location) {
+        String path = location.getPath();
+        if (path.startsWith("sounds/") && path.endsWith(".ogg")) {
+            return new ResourceLocation(location.getNamespace(), "tacz_sounds/" + path.substring("sounds/".length()));
+        }
+        return location;
+    }
+
     @Override
     public InputStream getInputStream(ResourceLocation location) throws IOException {
+        location = redirectSoundPath(location);
         InputStream stream = TACZClientAssetManager.INSTANCE.openPackAsset(location);
         if (stream == null) {
             throw new FileNotFoundException(location.toString());
@@ -88,6 +122,7 @@ public final class GunPackSoundResourcePack implements IResourcePack {
 
     @Override
     public boolean resourceExists(ResourceLocation location) {
+        location = redirectSoundPath(location);
         String path = location.getPath();
         if (!path.endsWith(".ogg")) {
             return false;

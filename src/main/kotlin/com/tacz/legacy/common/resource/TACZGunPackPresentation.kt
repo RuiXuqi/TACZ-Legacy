@@ -14,12 +14,25 @@ internal data class TACZAttachmentLaserConfigDefinition(
 )
 
 internal object TACZGunPackPresentation {
-    fun localeCandidates(): List<String> {
+    @Volatile
+    private var currentLanguageCodeResolverOverride: (() -> String?)? = null
+
+    fun localeCandidates(): List<String> = localeCandidates(resolveCurrentClientLanguageCode(), Locale.getDefault())
+
+    internal fun localeCandidates(currentLanguageCode: String?, fallbackLocale: Locale): List<String> {
         val candidates = LinkedHashSet<String>()
-        candidates += normalizeLocale(Locale.getDefault().toLanguageTag())
-        candidates += normalizeLocale(Locale.getDefault().toString())
-        candidates += "en_us"
+        if (currentLanguageCode.isNullOrBlank()) {
+            addLocaleCandidates(candidates, fallbackLocale.toLanguageTag())
+            addLocaleCandidates(candidates, fallbackLocale.toString())
+        } else {
+            addLocaleCandidates(candidates, currentLanguageCode)
+        }
+        candidates += DEFAULT_LOCALE
         return candidates.filter(String::isNotBlank).toList()
+    }
+
+    internal fun setCurrentLanguageCodeResolverForTests(resolver: (() -> String?)?) {
+        currentLanguageCodeResolverOverride = resolver
     }
 
     fun localizedText(
@@ -145,6 +158,21 @@ internal object TACZGunPackPresentation {
             ?: 1.0f
     }
 
+    fun resolveGunLaserConfig(snapshot: TACZRuntimeSnapshot, gunId: ResourceLocation): TACZAttachmentLaserConfigDefinition? {
+        val displayId = resolveGunDisplayId(snapshot, gunId) ?: return null
+        val laser = snapshot.gunDisplays[displayId]?.raw?.jsonObject("laser") ?: return null
+        return TACZAttachmentLaserConfigDefinition(
+            defaultColor = parseLaserColor(laser.stringValue("default_color")),
+            canEdit = laser.booleanValue("can_edit", defaultValue = true),
+            length = laser.intValue("length")
+                .takeIf { it > 0 }
+                ?: 25,
+            width = laser.floatValue("width")
+                ?.takeIf { it > 0.0f }
+                ?: 0.008f,
+        )
+    }
+
     fun resolveAttachmentZoomLevels(snapshot: TACZRuntimeSnapshot, attachmentId: ResourceLocation): FloatArray? {
         val displayId = resolveAttachmentDisplayId(snapshot, attachmentId) ?: return null
         val zoomValues = snapshot.attachmentDisplays[displayId]
@@ -266,6 +294,25 @@ internal object TACZGunPackPresentation {
         return false
     }
 
+    private fun resolveCurrentClientLanguageCode(): String? {
+        currentLanguageCodeResolverOverride?.invoke()?.takeIf(String::isNotBlank)?.let { return it }
+        return runCatching {
+            val minecraftClass = Class.forName("net.minecraft.client.Minecraft")
+            val minecraft = minecraftClass.getMethod("getMinecraft").invoke(null) ?: return null
+            val gameSettings = minecraftClass.getField("gameSettings").get(minecraft) ?: return null
+            gameSettings.javaClass.getField("language").get(gameSettings) as? String
+        }.getOrNull()?.takeIf(String::isNotBlank)
+    }
+
+    private fun addLocaleCandidates(target: MutableSet<String>, rawLocale: String?) {
+        val normalized = normalizeLocale(rawLocale.orEmpty())
+        if (normalized.isBlank()) {
+            return
+        }
+        target += normalized
+        normalized.substringBefore('_').takeIf { it.isNotBlank() && it != normalized }?.let(target::add)
+    }
+
     private fun normalizeLocale(locale: String): String = locale.lowercase(Locale.ROOT).replace('-', '_')
 
     private fun parseLaserColor(rawValue: String?): Int {
@@ -278,6 +325,7 @@ internal object TACZGunPackPresentation {
 
     private const val TAG_PREFIX: String = "#"
     private const val DEFAULT_LASER_COLOR: Int = 0xFF0000
+    private const val DEFAULT_LOCALE: String = "en_us"
 }
 
 private fun JsonObject.jsonObject(key: String): JsonObject? =

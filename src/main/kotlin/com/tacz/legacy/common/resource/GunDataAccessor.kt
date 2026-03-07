@@ -33,6 +33,7 @@ public class GunCombatData private constructor(
     public val ammoId: ResourceLocation?,
     public val ammoAmount: Int,
     public val roundsPerMinute: Int,
+    public val canSlide: Boolean,
     public val boltType: BoltType,
     public val drawTimeS: Float,
     public val putAwayTimeS: Float,
@@ -47,6 +48,7 @@ public class GunCombatData private constructor(
     public val burstMinInterval: Float,
     public val burstCount: Int,
     public val hasHeatData: Boolean,
+    public val heatMax: Float,
     public val isReloadInfinite: Boolean,
     public val reloadType: String,
     public val meleeData: GunMeleeCombatData?,
@@ -60,11 +62,16 @@ public class GunCombatData private constructor(
         return (60_000L / roundsPerMinute)
     }
 
+    public fun canSlide(): Boolean = canSlide
+
     public companion object {
         internal fun fromRawJson(raw: JsonObject, def: TACZGunDataDefinition): GunCombatData {
             val bolt = raw.getAsJsonPrimitive("bolt")?.asString?.let { name ->
                 try { BoltType.valueOf(name.uppercase()) } catch (_: Exception) { BoltType.OPEN_BOLT }
             } ?: BoltType.OPEN_BOLT
+            val canSlide = raw.getAsJsonPrimitive("can_slide")?.asBoolean
+                ?: raw.getAsJsonPrimitive("canSlide")?.asBoolean
+                ?: true
 
             val drawTime = raw.getAsJsonPrimitive("draw_time")?.asFloat ?: 0.35f
             val putAwayTime = raw.getAsJsonPrimitive("put_away_time")?.asFloat ?: 0.35f
@@ -88,7 +95,9 @@ public class GunCombatData private constructor(
 
             val fireModes = raw.getAsJsonArray("fire_mode")?.map { it.asString } ?: listOf("semi")
 
-            val hasHeat = raw.has("heat")
+            val heatObj = raw.safeGetObject("heat")
+            val hasHeat = heatObj != null
+            val heatMax = heatObj?.getAsJsonPrimitive("max")?.asFloat ?: 100.0f
 
             val meleeObj = raw.safeGetObject("melee")
             val meleeData = if (meleeObj != null) {
@@ -107,6 +116,8 @@ public class GunCombatData private constructor(
             } else null
 
             val bulletObj = raw.safeGetObject("bullet")
+            val extraDamageObj = bulletObj?.safeGetObject("extra_damage")
+            val explosionObj = bulletObj?.safeGetObject("explosion")
             val bulletCombatData = BulletCombatData(
                 damage = bulletObj?.getAsJsonPrimitive("damage")?.asFloat ?: 5.0f,
                 speed = bulletObj?.getAsJsonPrimitive("speed")?.asFloat ?: 5.0f,
@@ -122,12 +133,49 @@ public class GunCombatData private constructor(
                 igniteEntityTime = bulletObj?.getAsJsonPrimitive("ignite_entity_time")?.asInt ?: 2,
                 igniteBlock = bulletObj?.safeGetObject("ignite")?.getAsJsonPrimitive("ignite_block")?.asBoolean
                     ?: bulletObj?.getAsJsonPrimitive("ignite_block")?.asBoolean ?: false,
+                extraDamageData = extraDamageObj?.let { extra ->
+                    BulletExtraDamageData(
+                        armorIgnore = extra.getAsJsonPrimitive("armor_ignore")?.asFloat ?: 0.0f,
+                        headShotMultiplier = extra.getAsJsonPrimitive("head_shot_multiplier")?.asFloat ?: 1.0f,
+                        damageAdjust = extra.getAsJsonArray("damage_adjust")
+                            ?.mapNotNull { element ->
+                                val obj = element.takeIf(JsonElement::isJsonObject)?.asJsonObject ?: return@mapNotNull null
+                                val damage = obj.getAsJsonPrimitive("damage")?.asFloat ?: return@mapNotNull null
+                                val distanceElement = obj.get("distance") ?: return@mapNotNull null
+                                val distance = when {
+                                    distanceElement.isJsonPrimitive && distanceElement.asJsonPrimitive.isString -> {
+                                        if (distanceElement.asString.equals("infinite", ignoreCase = true)) {
+                                            Float.POSITIVE_INFINITY
+                                        } else {
+                                            return@mapNotNull null
+                                        }
+                                    }
+                                    distanceElement.isJsonPrimitive && distanceElement.asJsonPrimitive.isNumber -> distanceElement.asFloat
+                                    else -> return@mapNotNull null
+                                }
+                                DistanceDamagePoint(distance = distance, damage = damage)
+                            }
+                            ?.sortedBy { it.distance }
+                            ?: emptyList(),
+                    )
+                },
+                explosionData = explosionObj?.let {
+                    ExplosionData(
+                        explode = it.getAsJsonPrimitive("explode")?.asBoolean ?: false,
+                        radius = it.getAsJsonPrimitive("radius")?.asFloat ?: 0.0f,
+                        damage = it.getAsJsonPrimitive("damage")?.asFloat ?: 0.0f,
+                        knockback = it.getAsJsonPrimitive("knockback")?.asBoolean ?: false,
+                        destroyBlock = it.getAsJsonPrimitive("destroy_block")?.asBoolean ?: false,
+                        delay = it.getAsJsonPrimitive("delay")?.asFloat ?: 0.0f,
+                    )
+                },
             )
 
             return GunCombatData(
                 ammoId = def.ammoId,
                 ammoAmount = def.ammoAmount,
                 roundsPerMinute = def.roundsPerMinute,
+                canSlide = canSlide,
                 boltType = bolt,
                 drawTimeS = drawTime,
                 putAwayTimeS = putAwayTime,
@@ -142,6 +190,7 @@ public class GunCombatData private constructor(
                 burstMinInterval = burstInterval,
                 burstCount = burstCount,
                 hasHeatData = hasHeat,
+                heatMax = heatMax,
                 isReloadInfinite = isInfinite,
                 reloadType = reloadType,
                 meleeData = meleeData,
@@ -173,6 +222,53 @@ public class GunDefaultMeleeCombatData(
 /**
  * 子弹战斗参数。对应上游 TACZ BulletData 结构。
  */
+
+
+
+public data class ExplosionData(
+    val explode: Boolean,
+    val radius: Float,
+    val damage: Float,
+    val knockback: Boolean,
+    val destroyBlock: Boolean,
+    val delay: Float
+)
+
+public data class DistanceDamagePoint(
+    val distance: Float,
+    val damage: Float,
+)
+
+public data class BulletDamageSplit(
+    val normalDamage: Float,
+    val armorPiercingDamage: Float,
+)
+
+public class BulletExtraDamageData(
+    public val armorIgnore: Float,
+    public val headShotMultiplier: Float,
+    public val damageAdjust: List<DistanceDamagePoint>,
+) {
+    public fun resolveDamage(distance: Double, fallbackDamage: Float): Float {
+        if (damageAdjust.isEmpty()) {
+            return fallbackDamage
+        }
+        for (pair in damageAdjust) {
+            if (distance < pair.distance || pair.distance.isInfinite()) {
+                return pair.damage
+            }
+        }
+        return damageAdjust.last().damage
+    }
+
+    public fun splitDamage(totalDamage: Float, armorIgnoreRatio: Float = armorIgnore): BulletDamageSplit {
+        val clampedRatio = armorIgnoreRatio.coerceIn(0.0f, 1.0f)
+        val armorPiercingDamage = (totalDamage * clampedRatio).coerceAtLeast(0.0f)
+        val normalDamage = (totalDamage - armorPiercingDamage).coerceAtLeast(0.0f)
+        return BulletDamageSplit(normalDamage = normalDamage, armorPiercingDamage = armorPiercingDamage)
+    }
+}
+
 public class BulletCombatData(
     /** 基础伤害 */
     public val damage: Float,
@@ -198,6 +294,10 @@ public class BulletCombatData(
     public val igniteEntityTime: Int,
     /** 是否点燃方块 */
     public val igniteBlock: Boolean,
+    /** 额外伤害数据：距离伤害曲线 / 爆头倍率 / 穿甲比例 */
+    public val extraDamageData: BulletExtraDamageData? = null,
+    /** 爆炸属性 */
+    public val explosionData: ExplosionData? = null,
 ) {
     /** 是否有曳光弹 */
     public fun hasTracerAmmo(): Boolean = tracerCountInterval >= 0

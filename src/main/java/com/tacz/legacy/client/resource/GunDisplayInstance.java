@@ -10,9 +10,7 @@ import com.tacz.legacy.api.client.animation.statemachine.LuaAnimationStateMachin
 import com.tacz.legacy.api.client.animation.statemachine.LuaStateMachineFactory;
 import com.tacz.legacy.client.animation.statemachine.GunAnimationStateContext;
 import com.tacz.legacy.client.model.BedrockAnimatedModel;
-import com.tacz.legacy.client.model.GunModelConstant;
-import com.tacz.legacy.client.model.functional.LeftHandRender;
-import com.tacz.legacy.client.model.functional.RightHandRender;
+import com.tacz.legacy.client.model.BedrockGunModel;
 import com.tacz.legacy.client.resource.pojo.animation.bedrock.BedrockAnimationFile;
 import com.tacz.legacy.client.resource.pojo.display.gun.GunDisplay;
 import com.tacz.legacy.client.resource.pojo.display.gun.GunTransform;
@@ -26,10 +24,10 @@ import java.util.Map;
 
 /**
  * 经过处理和校验的枪械显示运行时数据。
- * Port of upstream TACZ GunDisplayInstance, simplified for 1.12.2.
+ * Port of upstream TACZ GunDisplayInstance for 1.12.2.
  */
 public class GunDisplayInstance {
-    private BedrockAnimatedModel gunModel;
+     private BedrockGunModel gunModel;
     private @Nullable LuaAnimationStateMachine<GunAnimationStateContext> animationStateMachine;
     private @Nullable LuaTable stateMachineParam;
     private Map<String, ResourceLocation> sounds = Maps.newHashMap();
@@ -38,8 +36,6 @@ public class GunDisplayInstance {
     private float ironZoom = 1.2f;
     private float zoomModelFov = 70f;
     private boolean showCrosshair = false;
-    private @Nullable LeftHandRender leftHandRender;
-    private @Nullable RightHandRender rightHandRender;
 
     private GunDisplayInstance() {}
 
@@ -71,12 +67,7 @@ public class GunDisplayInstance {
         if (textureLocation == null) throw new IllegalArgumentException("display missing texture");
         modelTexture = textureLocation;
 
-        gunModel = new BedrockAnimatedModel(modelData.getPojo(), modelData.getVersion());
-        // Register hand functional renderers
-        leftHandRender = new LeftHandRender(gunModel);
-        rightHandRender = new RightHandRender(gunModel);
-        gunModel.setFunctionalRenderer(GunModelConstant.LEFTHAND_POS_NODE, bedrockPart -> leftHandRender);
-        gunModel.setFunctionalRenderer(GunModelConstant.RIGHTHAND_POS_NODE, bedrockPart -> rightHandRender);
+        gunModel = new BedrockGunModel(modelData.getPojo(), modelData.getVersion());
     }
 
     private void checkAnimation(GunDisplay display, TACZClientAssetManager assets) {
@@ -131,7 +122,7 @@ public class GunDisplayInstance {
 
     // --- Getters ---
 
-    public BedrockAnimatedModel getGunModel() {
+    public BedrockGunModel getGunModel() {
         return gunModel;
     }
 
@@ -140,8 +131,9 @@ public class GunDisplayInstance {
      * after binding the player skin texture.
      */
     public void setActiveGunTexture(@Nullable ResourceLocation texture) {
-        if (leftHandRender != null) leftHandRender.setGunTexture(texture);
-        if (rightHandRender != null) rightHandRender.setGunTexture(texture);
+        if (gunModel != null) {
+            gunModel.setActiveGunTexture(texture);
+        }
     }
 
     @Nullable

@@ -2,7 +2,6 @@ package com.tacz.legacy.client.resource.pojo.display.gun
 
 import com.google.gson.GsonBuilder
 import com.tacz.legacy.client.resource.serialize.Vector3fSerializer
-import com.tacz.legacy.common.resource.TACZJson
 import net.minecraft.util.ResourceLocation
 import org.joml.Vector3f
 import org.junit.Assert.*
@@ -139,6 +138,67 @@ class GunDisplayParsingTest {
     }
 
     @Test
+    fun `parse gun display keeps animation fallback and render metadata`() {
+        val json = """
+        {
+          "model": "tacz:gun/model/ak47_geo",
+          "texture": "tacz:gun/uv/ak47",
+          "animation": "tacz:ak47",
+          "state_machine": "tacz:ak47_state_machine",
+          "use_default_animation": "rifle",
+          "default_animation": "tacz:common/rifle_default",
+          "player_animator_3rd": "tacz:rifle_default.player_animation",
+          "3rd_fixed_hand": true,
+          "muzzle_flash": {
+            "texture": "tacz:flash/common_muzzle_flash",
+            "scale": 0.75
+          },
+          "shell": {
+            "initial_velocity": [5, 2, 1],
+            "random_velocity": [1, 1, 0.25],
+            "acceleration": [0.0, -10, 0.0],
+            "angular_velocity": [360, -1200, 90],
+            "living_time": 1.0
+          },
+          "ammo": {
+            "tracer_color": "#FF8888",
+            "particle": {
+              "name": "campfire_signal_smoke",
+              "delta": [0, 0, 0],
+              "speed": 0,
+              "life_time": 50,
+              "count": 5
+            }
+          }
+        }
+        """.trimIndent()
+
+        val display = gson.fromJson(json, GunDisplay::class.java)
+        display.init()
+
+        assertEquals(DefaultAnimationType.RIFLE, display.defaultAnimationType)
+        assertEquals(ResourceLocation("tacz", "common/rifle_default"), display.defaultAnimation)
+        assertEquals(ResourceLocation("tacz", "rifle_default.player_animation"), display.playerAnimator3rd)
+        assertTrue(display.is3rdFixedHand())
+
+        assertNotNull(display.muzzleFlash)
+        assertEquals(ResourceLocation("tacz", "textures/flash/common_muzzle_flash.png"), display.muzzleFlash!!.texture)
+        assertEquals(0.75f, display.muzzleFlash!!.scale, 0.001f)
+
+        assertNotNull(display.shellEjection)
+        assertEquals(5.0f, display.shellEjection!!.initialVelocity.x, 0.001f)
+        assertEquals(-10.0f, display.shellEjection!!.acceleration.y, 0.001f)
+        assertEquals(1.0f, display.shellEjection!!.livingTime, 0.001f)
+
+        assertNotNull(display.gunAmmo)
+        assertEquals("#FF8888", display.gunAmmo!!.tracerColor)
+        assertNotNull(display.gunAmmo!!.particle)
+        assertEquals("campfire_signal_smoke", display.gunAmmo!!.particle!!.name)
+        assertEquals(50, display.gunAmmo!!.particle!!.lifeTime)
+        assertEquals(5, display.gunAmmo!!.particle!!.count)
+    }
+
+    @Test
     fun `defaults when fields are absent`() {
         val json = """
         {
@@ -153,8 +213,14 @@ class GunDisplayParsingTest {
         assertEquals(70f, display.zoomModelFov, 0.001f)
         assertFalse(display.isShowCrosshair)
         assertNull(display.animationLocation)
+        assertNull(display.defaultAnimationType)
+        assertNull(display.defaultAnimation)
+        assertNull(display.playerAnimator3rd)
         assertNull(display.sounds)
         assertNull(display.transform)
         assertNull(display.gunLod)
+        assertNull(display.shellEjection)
+        assertNull(display.gunAmmo)
+        assertNull(display.muzzleFlash)
     }
 }

@@ -36,7 +36,7 @@ public class ObjectAnimationSoundChannel {
         float mixVolume = GunSoundPlayManager.applyClientDistanceMix(entity, volume, distance);
         for (int i = from + 1; i <= to; i++) {
             ResourceLocation name = content.keyframeSoundName[i];
-            GunSoundPlayManager.playClientSound(entity, name, mixVolume, pitch, distance);
+            GunSoundPlayManager.playAnimationSound(entity, name, mixVolume, pitch, distance);
         }
     }
 
