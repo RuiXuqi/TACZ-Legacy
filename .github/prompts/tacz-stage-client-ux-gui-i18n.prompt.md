@@ -1,40 +1,23 @@
 ---
 name: "TACZ Stage Client UX GUI & I18n"
-description: "Build the complete interactive Gun Refit Screen and Polish Client GUI/I18n."
+description: "Fix TACZ-Legacy Client UX: Revert/Refactor GunRefitScreen to previous working structure."
 agent: "TACZ Migration"
-argument-hint: "填写具体缺少的 GUI 面板（如改装台）、本地化遗漏、creative tab 表现等等。"
+argument-hint: "本轮强绑定：GUI严重变形，需要回滚或重构 GunRefitScreen 回复正常布局。"
 ---
-迁移并修复 `TACZ` 的**客户端交互层、GunSmithTable 屏幕、沉浸式枪械改装界面 (GunRefitScreen) 及本地化表现**。
+修复 `TACZ` **沉浸式改装 GUI (GunRefitScreen) 渲染严重变形错位的问题，以及部分 I18N 提示**。
 
-## 当前危机与必须修复的严重 BUG （本轮重点）
-1. **枪械的沉浸式改装界面依然是严重的半成品**：
-   - 现有的 `GunSmithTableScreen` 虽然实现了基本的容器界面（可能还非常丑陋或缺失了交互材质）。
-   - 或者更严重的：真正的配件改装面板 `GunRefitScreen` 根本就不存在，或者只有布局外壳，不能真实装备、卸下配件，也不能直观地预览 3D 枪模！
-   **任务**：你需要参考上游 `TACZ` 的沉浸式配件装卸逻辑，在改装台内构建完整的附件管理 GUI，支持点击槽位，发包到服务器真正应用/卸下附件！
-2. **用户现在明确反馈：Legacy 的沉浸式改装 GUI 和上游“完全是两个东西”。**
-   - 现状不只是“按钮少几个”，而是屏幕结构、预览方式、氛围层、信息层次、手中枪模过渡到屏幕内预览的方式都和上游不一致。
-   - 本轮必须把“手上的枪模平滑过渡到屏幕上的沉浸式预览”视作核心验收之一；如果当前只是切到另一个完全独立的平面预览器，那还不算过关。
-3. **不要把 `GunRefitScreen` 只做成一个功能后台。**
-   - backend / 发包当然要通，但用户这轮反馈首先是在说“视觉交互体验根本不是同一个系统”。
-   - 因此本 Prompt 需要同时对齐：screen 布局、预览 camera / model transition、信息区层级、交互反馈，而不仅仅是“能装配件”。
+## ⚠️ 第二轮通报与新问题修复（本轮重点）
+改装界面 (GunRefitScreen) 在本轮迭代后不仅没有好转，反而排版彻底崩溃（见图2），这是因为你前一轮对布局做了大量不兼容的改动，且由于没有 GUI 测试框架而直接蒙眼盲写。
+
+**本轮要求非常简单且强硬**：
+1. **彻底废弃之前错误的重构思路**，建议直接去抄 Git 的老提交！用户给定的旧稳定 Commit 是 `6302dff23e380f4e7b1d54395723f9d4bfc04277`。你需要回到那个版本（通过 `git show 6302dff23e380f4e7b1d54395723f9d4bfc04277:path_to_old_file` 或直接查阅历史），把之前的 `GunRefitScreen` 以及底下的组件 (`AttachmentSlot`, `InventoryWidget` 等) 的基础绘图和排版参数重新原样搬回来。
+2. **切忌盲目套入现代 Flex 布局**：1.12.2 是基于绝对坐标系 `TaczModularUI` 或基础坐标进行画图的。如果老版本能正常跑，说明 `drawBackground` 的原点和基于中心点（`width / 2`）相对偏移才是对的。
+3. **枪械渲染 (GunModel) 的视口投影**：目前界面里的枪械图标由于透视/拉伸变窄变扁，并且没有对发光部分做出正确阴影投射。还原界面的同时把枪模显示的 `GlStateManager.scale()` 或 `RenderHelper.enableGUIStandardItemLighting()` 也修好。
 
 ## 默认关注范围
-- `src/main/kotlin/com/tacz/legacy/client/gui/**` （重点排查或补齐 `GunRefitScreen` / `GunSmithTableScreen`）
-- `src/main/kotlin/com/tacz/legacy/common/network/**` （增加配件安装卸载的发包逻辑）
-- `src/main/kotlin/com/tacz/legacy/common/registry/LegacyCreativeTabs.kt` （完善标签分类）
+- `src/main/kotlin/com/tacz/legacy/client/gui/GunRefitScreen.kt`
+- `src/main/kotlin/com/tacz/legacy/client/gui/components/**`
+- 从 `6302dff23e380f4e7b1d54395723f9d4bfc04277` 里查阅旧版 `GunRefitScreen` 相关文件
 
 ## 执行要求
-- 确保 `GunRefitScreen` 是可以直接使用枪包内 display 模型进行预览的。复用现有的渲染基座 `TACZClientAssetManager`，可以在 GUI 内起一个迷你 Viewport 渲染当前枪支和已经装上的配件。
-- 确保有对应的选配件逻辑并发包给服务端。服务端负责把配件数据写入物品的 NBT 中。必须确保配件一旦装上，数据真实落地。
-- 不要只是写一个摆设 UI！它的所有按钮（如果有准镜、枪口、消音器选择）必须具有真实副作用。
-- 必须对齐上游沉浸式改装界面的**视觉组织与过渡语义**：枪模如何进入 screen 预览、预览视角如何稳定、按钮/列表/说明面板如何与模型预览形成一个整体，而不是几块松散控件。
-- 如果涉及创造模式物品栏，确保其更精细，而不是只有一个大杂烩标签。
-
-## 避坑指南
-- 不要修改渲染库的核心加载逻辑。你的任务是“画出用户操作面板并且发包”。
-- 如果没有发包机制，装配将仅局限于客户端，这会在进入世界/退出界面后立刻重置丢失！千万不要只写纯前端逻辑！
-
-## 输出必须包含
-- 具体的面板（Screen）代码落点。
-- 配件装备的网络同步机制（C2S Packet）落地情况。
-- 若本轮对齐了沉浸式预览 / 枪模过渡，必须明确说明：Legacy 之前为什么看起来像“另一个完全不同的 GUI”，这次又是如何缩小视觉差距的。
+- 你的唯一目标是把屏幕变得哪怕和最老的可用版本一样，也不允许再出现右半边全部空白、居中框拉伸、黑边框乱入的诡异状态。如果不确定，直接 Copy 旧版。

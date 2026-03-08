@@ -1,34 +1,38 @@
 ---
-name: "TACZ Stage Render Animation First Person"
-description: "Fix TACZ-Legacy first-person gun animation, default animation fallback, and animation-driven sound playback."
+name: "TACZ Stage Render Animation First Person & Effects"
+description: "Fix TACZ-Legacy first-person Matrix and Scale, put_away animations, disable vanilla arm swing, and fix bullet projectile rendering."
 agent: "TACZ Migration"
-argument-hint: "填写第一人称枪械不显示、手模渲染、动画无法播放等问题、上游文件或验收标准"
+argument-hint: "本轮负责第一人称矩阵问题、切枪动画、原版挥手屏蔽、子弹渲染问题等。"
 ---
-迁移并修复 `TACZ` 的**第一人称手持模型动画链、默认动画回退、状态机生命周期与动画音效播放链**。
+修复 `TACZ` **第一人称渲染矩阵/缩放、动画状态机生命周期、原版动作屏蔽以及子弹射线/拖尾渲染**。
 
-## ⚠️ 紧急通报：欺骗性交付与实机崩溃（本轮必须解决）
-上一轮的 agent 声称迭代完成，但**用户实机测试发现问题不仅没修，甚至在部分层面完全没有实装**：
-1. **动画完全不播放，依然只有 idle！切枪/收枪也没有动画。**
-2. **拿起武器/开火等动画都没听到音效，说明 `ObjectAnimationSoundChannel` 仍然是断开的或者被消音的。**
-3. **模型渲染位置依旧不对，还在原版主手位置，没有任何基于屏中心的 Transform 接管。**
-4. **开火枪械抽搐/枪焰/摄像机抖动/后坐力系统全都没做。**
+## ⚠️ 第二轮通报与新问题修复（本轮重点）
+这轮迭代你需要针对实机测试反馈出的 **视觉变形、动画毛刺和弹道渲染异常** 进行彻底修复。请直接看下面的验收指征，逐一干掉！
 
-我们现在已经在 `scripts/runclient_focused_smoke.sh` 中加固了测试脚本，直接加入了**自动检视触发 (ATTEMPT_INSPECT) 和多阶截图拦截 (`inspect_0s`, `inspect_1s`, `inspect_2s`)**。你无法再用“看到了 ANIMATION_OBSERVED 日志”来蒙混过关。如果不把实际渲染修好，你在截图里看到的将永远是原版位置的静止模型。
+### 一、 枪模矩阵与比例问题（图示看起来变形/不对头）
+1. **模型矩阵缩放可能有问题**：目前整体看起来视觉比例依旧不对。请严格核对上游 第一人称视角/Aim Pose 变换下应用的基础 Scale、Translation 和 Rotation，以及它们在 1.12.2 Renderer 中被乘入的顺序。
+2. **检查 FOV 与 Screen 投影**：模型如果拉伸或者不协调，有可能是 `FirstPersonRenderGunEvent` 里的视角设置或者 `GlStateManager.scale()` 用错。
 
-## 具体任务指标与检查点
-1. **彻底接管第一人称坐标**：修复 `FirstPersonRenderGunEvent` / `GunGeometryRenderer` 叠加方式，不能让枪还在原版位置，必须在屏幕中心正确透视。
-2. **真实状态机驱动**：找到并修复为什么 Lua 状态机卡在 idle 没进入 `inspect` 和 `shoot`，必须修复动画解析与运行时播放机制。
-3. **动画带声音**：补齐等价于上游的 **sound-only / visualUpdate 驱动**，如果日志里没有打出相关声音包被读取的信息，绝对不算完。
-4. **开火视觉表现**：找到上游关于开火震动（Recoil/Camera Shake）、火光（Muzzle Flash）的基础逻辑，移植并确保截图里开火瞬间能看见。
+### 二、 动画状态机（切枪与收枪）
+1. **切枪动画问题**：枪切到另一把枪时，没触发 `put_away`（收回）旧枪动画。只有切到空手时存在收枪动画。必须保证 `put_away` 在换主手物品（如果是两把枪）时的生命周期正确流转。
+2. **收枪动画（put_away）毛刺**：当前收枪时瞬间会看到手部复位再收回（似乎走了错误的 fallback 或者原始模型默认姿态露出）。请修复切枪瞬间的状态清空平滑过渡问题。
+
+### 三、 屏蔽原版挥手动作与卡死问题
+1. **点左键上下抽搐**：在某些枪按左键会疯狂抽搐。你必须拦截原版 Minecraft 的 **挖块/攻击时的手臂挥动 (arm swing / swingProgress)** 进度，强制归零，否则原版逻辑会和枪体动画冲突叠加。
+2. **有些枪开不出火卡死（例如 timeless50）**：在没有报错的情况下点了没反应，可能是这把枪的动作资源缺失或者动画卡死导致了后续状态闭塞，请找出这类开不出火且抽搐的异常处理分支。
+
+### 四、 子弹/弹道渲染问题（白方块与没有拖尾）
+1. **子弹目前是个飘在空中的白方块**：渲染出的实体并未和枪管/落点对齐，飞行方向表现是乱飘的（尽管落点判断正确）。
+2. **没有拖尾（Trail）**：上游 TACZ `EntityKineticBullet` 会有对应的专门渲染器 `RenderKineticBullet` 来绘制细长的火光发光射线和烟雾拖尾。你需要完善此特性的 1.12.2 Porting，使子弹有速度感且视觉不偏移。
 
 ## 默认关注范围
 - `src/main/kotlin/com/tacz/legacy/client/event/FirstPersonRenderGunEvent.kt`
 - `src/main/kotlin/com/tacz/legacy/client/gameplay/LegacyClientPlayerGunBridge.kt`
-- `src/main/kotlin/com/tacz/legacy/client/gameplay/LegacyClientGunAnimationDriver.kt`
-- `src/main/java/com/tacz/legacy/client/resource/GunDisplayInstance.java`
-- `src/main/java/com/tacz/legacy/api/client/animation/**`
+- `src/main/kotlin/com/tacz/legacy/client/render/item/GunGeometryRenderer.kt`
+- `src/main/kotlin/com/tacz/legacy/client/render/entity/RenderKineticBullet.kt` (子弹渲染器)
+- 动画状态机切枪/卸载生命周期控制部分。
 
 ## 执行要求
-- **不要说谎！** 必须用眼睛查看截图：`/tmp/agent_workspace_screenshot.png` 或 `build/smoke-tests/focused-smoke-screenshots/*/inspect_*.png`，如果三张图一模一样，或者模型不在屏幕中央，**即为不合格**，必须继续修。
-- 日志里必须出现音效或粒子触发的证据，不能只看 "PASS"。
-- 任何无法解决的遗留代码必须真实转移给相关 Agent，绝不允许隐藏 BUG 伪报完成！
+- 必须找到原版臂膀挥动被触发的源头并用 Event Cancel 彻底拦截。
+- 子弹必须渲染成“高亮直线拖尾”而不是漂浮的方块。必须用代码将起/终点做插值。
+- 切枪行为要在代码层面强制触发生命周期注销或切枪过渡。
