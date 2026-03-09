@@ -119,7 +119,7 @@ minecraft {
         args += "-Dmixin.debug.export=true"
     }
     val forwardedRuntimeProperties = System.getProperties().stringPropertyNames()
-        .filter { it.startsWith("tacz.focusedSmoke") || it.startsWith("tacz.audio") }
+        .filter { it.startsWith("tacz.focusedSmoke") || it.startsWith("tacz.audio") || it.startsWith("tacz.tracerDebug") }
         .sorted()
         .mapNotNull { key ->
             System.getProperty(key)?.let { value -> "-D${key}=${value}" }
