@@ -5,6 +5,7 @@ import com.tacz.legacy.common.resource.BulletCombatData
 import com.tacz.legacy.common.resource.DistanceDamagePoint
 import com.tacz.legacy.common.config.HeadShotAabbConfigRead
 import com.tacz.legacy.common.config.LegacyConfigManager
+import io.netty.buffer.ByteBuf
 import net.minecraft.entity.Entity
 import net.minecraft.entity.EntityList
 import net.minecraft.entity.EntityLivingBase
@@ -16,12 +17,17 @@ import net.minecraft.init.Blocks
 import net.minecraft.util.DamageSource
 import net.minecraft.util.ResourceLocation
 import net.minecraft.util.math.AxisAlignedBB
+import net.minecraft.util.math.MathHelper
 import net.minecraft.util.math.RayTraceResult
 import net.minecraft.util.math.Vec3d
 import net.minecraft.world.World
 import net.minecraftforge.fml.common.registry.EntityEntry
 import net.minecraftforge.fml.common.registry.EntityEntryBuilder
+import net.minecraftforge.fml.common.registry.IEntityAdditionalSpawnData
+import net.minecraftforge.fml.common.network.ByteBufUtils
 import net.minecraftforge.registries.IForgeRegistry
+import org.joml.Vector3d
+import org.joml.Vector3f
 import kotlin.math.max
 import kotlin.math.sqrt
 
@@ -46,7 +52,23 @@ internal object LegacyEntities {
     }
 }
 
-internal class EntityKineticBullet : EntityThrowable {
+internal class EntityKineticBullet : EntityThrowable, IEntityAdditionalSpawnData {
+    internal companion object {
+        private const val DEFAULT_FORWARD_COMPONENT = 8.0
+        private const val DEFAULT_INACCURACY_SCALE = 0.007499999832361937
+
+        internal fun computeShotDirection(pitch: Double, yaw: Double, spreadX: Double, spreadY: Double): Vec3d {
+            val direction = Vector3d(spreadX, spreadY, DEFAULT_FORWARD_COMPONENT)
+            direction.rotateX(Math.toRadians(pitch))
+            direction.rotateY(Math.toRadians(-yaw))
+            val length = direction.length()
+            if (length <= 1.0E-8) {
+                return Vec3d.ZERO
+            }
+            return Vec3d(direction.x / length, direction.y / length, direction.z / length)
+        }
+    }
+
     private var damage: Float = 5.0f
     private var bulletSpeed: Float = 5.0f
     private var bulletGravity: Float = 0.0f
@@ -65,6 +87,7 @@ internal class EntityKineticBullet : EntityThrowable {
     private var startPosX: Double = 0.0
     private var startPosY: Double = 0.0
     private var startPosZ: Double = 0.0
+    private var shooterEntityId: Int = -1
 
     // Explosion properties
     private var hasExplosion: Boolean = false
@@ -83,6 +106,9 @@ internal class EntityKineticBullet : EntityThrowable {
     /** 弹药 ID，供下游渲染/特效使用  */
     internal var ammoId: ResourceLocation = ResourceLocation(TACZLegacy.MOD_ID, "empty")
         private set
+    internal var firstPersonRenderOffset: Vector3f? = null
+    internal var firstPersonCameraPitch: Float = 0f
+    internal var firstPersonCameraYaw: Float = 0f
 
     /** NBT / network deserialization constructor */
     constructor(worldIn: World) : super(worldIn) {
@@ -100,6 +126,7 @@ internal class EntityKineticBullet : EntityThrowable {
         isTracer: Boolean,
     ) : super(worldIn, shooter) {
         setSize(0.1f, 0.1f)
+        this.shooterEntityId = shooter.entityId
         this.damage = bulletData.damage
         this.bulletSpeed = bulletData.speed
         this.bulletGravity = bulletData.gravity
@@ -114,6 +141,7 @@ internal class EntityKineticBullet : EntityThrowable {
         this.gunId = gunId
         this.gunDisplayId = gunDisplayId
         this.ammoId = ammoId
+        resetInitialPosition(shooter)
         this.startPosX = posX
         this.startPosY = posY
         this.startPosZ = posZ
@@ -143,10 +171,96 @@ internal class EntityKineticBullet : EntityThrowable {
         }
     }
 
+    internal fun shootFromRotation(shooter: Entity, pitch: Float, yaw: Float, velocity: Float, inaccuracy: Float) {
+        val spreadX = rand.nextGaussian() * DEFAULT_INACCURACY_SCALE * inaccuracy.toDouble()
+        val spreadY = rand.nextGaussian() * DEFAULT_INACCURACY_SCALE * inaccuracy.toDouble()
+        shootFromRotation(shooter, pitch, yaw, velocity, spreadX, spreadY)
+    }
+
+    internal fun shootFromRotation(shooter: Entity, pitch: Float, yaw: Float, velocity: Float, spreadX: Double, spreadY: Double) {
+        val direction = computeShotDirection(pitch.toDouble(), yaw.toDouble(), spreadX, spreadY).scale(velocity.toDouble())
+        motionX = direction.x
+        motionY = direction.y
+        motionZ = direction.z
+
+        val horizontalDistance = sqrt(motionX * motionX + motionZ * motionZ)
+        rotationYaw = Math.toDegrees(Math.atan2(motionX, motionZ)).toFloat()
+        rotationPitch = Math.toDegrees(Math.atan2(motionY, horizontalDistance)).toFloat()
+        prevRotationYaw = rotationYaw
+        prevRotationPitch = rotationPitch
+
+        motionX += shooter.motionX
+        motionZ += shooter.motionZ
+        if (!shooter.onGround) {
+            motionY += shooter.motionY
+        }
+    }
+
+    private fun resetInitialPosition(shooter: EntityLivingBase) {
+        val interpolatedX = shooter.lastTickPosX + (shooter.posX - shooter.lastTickPosX) / 2.0
+        val interpolatedY = shooter.lastTickPosY + (shooter.posY - shooter.lastTickPosY) / 2.0 + shooter.eyeHeight.toDouble()
+        val interpolatedZ = shooter.lastTickPosZ + (shooter.posZ - shooter.lastTickPosZ) / 2.0
+        setPosition(interpolatedX, interpolatedY, interpolatedZ)
+    }
+
     /** 获取实际伤害（含霰弹分摊） */
     internal fun getEffectiveDamage(): Float = resolveEffectiveDamageAt(Vec3d(posX, posY, posZ))
 
     internal fun isTracerAmmo(): Boolean = isTracerAmmo
+
+    internal fun getShooterForRender(): EntityLivingBase? {
+        val cached = thrower
+        if (cached != null && !cached.isDead) {
+            return cached
+        }
+        if (shooterEntityId < 0) {
+            return null
+        }
+        val resolved = world.getEntityByID(shooterEntityId) as? EntityLivingBase ?: return null
+        thrower = resolved
+        return resolved
+    }
+
+    override fun writeSpawnData(buffer: ByteBuf) {
+        buffer.writeFloat(rotationPitch)
+        buffer.writeFloat(rotationYaw)
+        buffer.writeDouble(motionX)
+        buffer.writeDouble(motionY)
+        buffer.writeDouble(motionZ)
+        ByteBufUtils.writeUTF8String(buffer, gunId.toString())
+        ByteBufUtils.writeUTF8String(buffer, gunDisplayId.toString())
+        ByteBufUtils.writeUTF8String(buffer, ammoId.toString())
+        buffer.writeBoolean(isTracerAmmo)
+        buffer.writeInt(shooterEntityId)
+    }
+
+    override fun readSpawnData(additionalData: ByteBuf) {
+        rotationPitch = additionalData.readFloat()
+        rotationYaw = additionalData.readFloat()
+        prevRotationPitch = rotationPitch
+        prevRotationYaw = rotationYaw
+        motionX = additionalData.readDouble()
+        motionY = additionalData.readDouble()
+        motionZ = additionalData.readDouble()
+        gunId = ResourceLocation(ByteBufUtils.readUTF8String(additionalData))
+        gunDisplayId = ResourceLocation(ByteBufUtils.readUTF8String(additionalData))
+        ammoId = ResourceLocation(ByteBufUtils.readUTF8String(additionalData))
+        isTracerAmmo = additionalData.readBoolean()
+        shooterEntityId = additionalData.readInt()
+        getShooterForRender()
+        if (world.isRemote && java.lang.Boolean.getBoolean("tacz.focusedSmoke")) {
+            TACZLegacy.logger.info(
+                "[FocusedSmoke] BULLET_CLIENT_SPAWN entityId={} gun={} display={} ammo={} tracer={} shooterId={} shooterResolved={}",
+                entityId,
+                gunId,
+                gunDisplayId,
+                ammoId,
+                isTracerAmmo,
+                shooterEntityId,
+                getShooterForRender() != null,
+            )
+        }
+    }
 
     override fun getGravityVelocity(): Float = bulletGravity
 
@@ -204,6 +318,7 @@ internal class EntityKineticBullet : EntityThrowable {
         compound.setDouble("StartPosX", startPosX)
         compound.setDouble("StartPosY", startPosY)
         compound.setDouble("StartPosZ", startPosZ)
+        compound.setInteger("ShooterEntityId", shooterEntityId)
         val damageAdjustList = NBTTagList()
         damageAdjust.forEach { pair ->
             val entry = NBTTagCompound()
@@ -261,6 +376,8 @@ internal class EntityKineticBullet : EntityThrowable {
         startPosX = if (compound.hasKey("StartPosX")) compound.getDouble("StartPosX") else posX
         startPosY = if (compound.hasKey("StartPosY")) compound.getDouble("StartPosY") else posY
         startPosZ = if (compound.hasKey("StartPosZ")) compound.getDouble("StartPosZ") else posZ
+        shooterEntityId = if (compound.hasKey("ShooterEntityId")) compound.getInteger("ShooterEntityId") else -1
+        getShooterForRender()
         damageAdjust.clear()
         if (compound.hasKey("DamageAdjust")) {
             val list = compound.getTagList("DamageAdjust", 10)
@@ -292,30 +409,114 @@ internal class EntityKineticBullet : EntityThrowable {
     }
 
     override fun onUpdate() {
-        super.onUpdate()
-        // 空气阻力
-        if (friction > 0.0f) {
-            val mov = motionX * motionX + motionY * motionY + motionZ * motionZ
-            if (mov > 0.0001) {
-                val factor = (1.0 - friction).coerceIn(0.0, 1.0)
-                motionX *= factor
-                motionY *= factor
-                motionZ *= factor
-            }
-        }
-        
-        if (hasExplosion && explosionDelay.isFinite()) {
-            explosionDelay -= 0.05f // 1 tick = 0.05s
-            if (explosionDelay <= 0 && !isDead) {
-                if (!world.isRemote) {
+        // 完全绕过 EntityThrowable.onUpdate() 的碰撞检测、0.99f 拖拽与 0.2 旋转插值。
+        // 与上游 TACZ EntityKineticBullet.tick() + onBulletTick() 逻辑对齐。
+        lastTickPosX = posX
+        lastTickPosY = posY
+        lastTickPosZ = posZ
+        // Entity.onUpdate() — 只跑计时器和骑乘逻辑
+        super.onEntityUpdate()
+
+        // ---- 服务端碰撞检测 (对齐上游 onBulletTick) ----
+        if (!world.isRemote) {
+            if (hasExplosion && explosionDelay.isFinite()) {
+                explosionDelay -= 0.05f
+                if (explosionDelay <= 0 && !isDead) {
                     triggerExplosion()
+                    setDead()
+                    return
                 }
-                setDead()
+            }
+
+            val startVec = Vec3d(posX, posY, posZ)
+            var endVec = Vec3d(posX + motionX, posY + motionY, posZ + motionZ)
+
+            // 方块碰撞
+            val blockResult = world.rayTraceBlocks(startVec, endVec)
+            if (blockResult != null && blockResult.typeOfHit == RayTraceResult.Type.BLOCK) {
+                endVec = blockResult.hitVec
+            }
+
+            // 实体碰撞
+            val entitiesInRange = world.getEntitiesWithinAABBExcludingEntity(
+                this,
+                entityBoundingBox.expand(motionX, motionY, motionZ).grow(1.0),
+            )
+            val hitEntities = mutableListOf<Pair<Entity, Vec3d>>()
+            for (entity in entitiesInRange) {
+                if (!entity.canBeCollidedWith()) continue
+                if (entity === thrower && ticksExisted < 5) continue
+                val aabb = entity.entityBoundingBox.grow(0.3)
+                val intercept = aabb.calculateIntercept(startVec, endVec)
+                if (intercept != null) {
+                    hitEntities += entity to intercept.hitVec
+                }
+            }
+            // 按距离排序
+            hitEntities.sortBy { (_, hitVec) -> startVec.squareDistanceTo(hitVec) }
+
+            // 处理实体命中
+            for ((entity, hitVec) in hitEntities) {
+                val entityHitResult = RayTraceResult(entity, hitVec)
+                if (!net.minecraftforge.event.ForgeEventFactory.onProjectileImpact(this, entityHitResult)) {
+                    onImpact(entityHitResult)
+                }
+                if (isDead) return
+                if (pierce < 1) {
+                    setDead()
+                    return
+                }
+            }
+
+            // 处理方块命中（在实体命中之后，与上游一致）
+            if (blockResult != null && blockResult.typeOfHit == RayTraceResult.Type.BLOCK) {
+                if (!net.minecraftforge.event.ForgeEventFactory.onProjectileImpact(this, blockResult)) {
+                    onImpact(blockResult)
+                }
+                if (isDead) return
             }
         }
-        
+
+        // ---- 位置与旋转更新 (对齐上游 tick) ----
+        posX += motionX
+        posY += motionY
+        posZ += motionZ
+
+        val horizontalDist = sqrt(motionX * motionX + motionZ * motionZ)
+        val targetYaw = (Math.toDegrees(Math.atan2(motionX, motionZ))).toFloat()
+        val targetPitch = (Math.toDegrees(Math.atan2(motionY, horizontalDist))).toFloat()
+        if (prevRotationPitch == 0.0f && prevRotationYaw == 0.0f) {
+            prevRotationYaw = targetYaw
+            prevRotationPitch = targetPitch
+        }
+        rotationYaw = lerpRotation(prevRotationYaw, targetYaw)
+        rotationPitch = lerpRotation(prevRotationPitch, targetPitch)
+        prevRotationPitch = rotationPitch
+        prevRotationYaw = rotationYaw
+
+        setPosition(posX, posY, posZ)
+
+        // ---- 阻力与重力 (只用 TACZ 的参数，不叠加 vanilla 0.99f) ----
+        var frictionFactor = friction
+        var gravityValue = bulletGravity
+        if (isInWater) {
+            frictionFactor = 0.4f
+            gravityValue *= 0.6f
+        }
+        motionX *= (1.0 - frictionFactor)
+        motionY *= (1.0 - frictionFactor)
+        motionZ *= (1.0 - frictionFactor)
+        motionY -= gravityValue
+
+        // ---- 寿命检查 ----
         lifespan--
         if (lifespan <= 0) setDead()
+    }
+
+    private fun lerpRotation(previous: Float, current: Float): Float {
+        var delta = MathHelper.wrapDegrees(current - previous)
+        delta = delta.coerceIn(-180.0f, 180.0f)
+        return previous + delta * 0.2f
     }
 
     private fun applyDirectHitDamage(target: Entity, hitPosition: Vec3d) {

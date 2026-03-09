@@ -55,6 +55,9 @@ public interface IGun {
     public fun isOverheatLocked(stack: ItemStack): Boolean
     public fun setOverheatLocked(stack: ItemStack, locked: Boolean)
 
+    public fun getHeatAmount(stack: ItemStack): Float
+    public fun setHeatAmount(stack: ItemStack, amount: Float)
+
     public companion object {
         public const val ATTACHMENT_BASE_TAG: String = "Attachment"
         public const val ATTACHMENT_LOCK_TAG: String = "AttachmentLock"
@@ -65,6 +68,7 @@ public interface IGun {
         public const val BULLET_IN_BARREL_TAG: String = "HasBulletInBarrel"
         public const val LASER_COLOR_TAG: String = "LaserColor"
         public const val OVERHEAT_LOCK_TAG: String = "OverHeated"
+        public const val HEAT_AMOUNT_TAG: String = "HeatAmount"
 
         @JvmStatic
         public fun getIGunOrNull(stack: ItemStack): IGun? = stack.item as? IGun

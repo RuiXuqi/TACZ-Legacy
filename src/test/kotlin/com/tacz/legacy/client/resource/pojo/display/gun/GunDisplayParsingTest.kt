@@ -223,4 +223,55 @@ class GunDisplayParsingTest {
         assertNull(display.gunAmmo)
         assertNull(display.muzzleFlash)
     }
+
+    @Test
+    fun `ammo_count_style defaults to NORMAL when absent`() {
+        val json = """
+        {
+          "model": "tacz:gun/model/ak47_geo",
+          "texture": "tacz:gun/uv/ak47"
+        }
+        """.trimIndent()
+        val display = gson.fromJson(json, GunDisplay::class.java)
+        assertEquals(AmmoCountStyle.NORMAL, display.ammoCountStyle)
+    }
+
+    @Test
+    fun `ammo_count_style parses normal`() {
+        val json = """
+        {
+          "model": "tacz:gun/model/ak47_geo",
+          "texture": "tacz:gun/uv/ak47",
+          "ammo_count_style": "normal"
+        }
+        """.trimIndent()
+        val display = gson.fromJson(json, GunDisplay::class.java)
+        assertEquals(AmmoCountStyle.NORMAL, display.ammoCountStyle)
+    }
+
+    @Test
+    fun `ammo_count_style parses percent`() {
+        val json = """
+        {
+          "model": "tacz:gun/model/minigun_geo",
+          "texture": "tacz:gun/uv/minigun",
+          "ammo_count_style": "percent"
+        }
+        """.trimIndent()
+        val display = gson.fromJson(json, GunDisplay::class.java)
+        assertEquals(AmmoCountStyle.PERCENT, display.ammoCountStyle)
+    }
+
+    @Test
+    fun `percent format produces expected output`() {
+        val format = java.text.DecimalFormat("000%")
+        // 20 out of 100 = 20%
+        assertEquals("020%", format.format(20f / 100f))
+        // 50 out of 200 = 25%
+        assertEquals("025%", format.format(50f / 200f))
+        // full ammo = 100%
+        assertEquals("100%", format.format(80f / 80f))
+        // 0 out of 80 = 0%
+        assertEquals("000%", format.format(0f / 80f))
+    }
 }

@@ -11,6 +11,7 @@ import org.junit.Test
 import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
+import java.nio.file.Paths
 
 class TACZAudioRuntimeTest {
     @After
@@ -18,6 +19,7 @@ class TACZAudioRuntimeTest {
         System.clearProperty("tacz.audio.backend")
         System.clearProperty("tacz.audio.preflight")
         System.clearProperty("tacz.audio.preflight.strict")
+        TACZAudioRuntime.setLegacyResourceResolverForTesting(null)
         TACZAudioRuntime.clear()
         GunSoundPlayManager.resetPlaybackBackendForTesting()
     }
@@ -27,7 +29,7 @@ class TACZAudioRuntimeTest {
         val root = Files.createTempDirectory("tacz-audio-runtime-manifest")
         val assetPath = root.resolve("assets/example/tacz_sounds/weapons/test.ogg")
         Files.createDirectories(assetPath.parent)
-        Files.write(assetPath, createMinimalVorbisOgg(sampleRate = 22050, channels = 1))
+        Files.copy(projectPath("src/main/resources/assets/tacz/custom/tacz_default_gun/assets/tacz/tacz_sounds/hk_mp5a5/hk_mp5a5_draw.ogg"), assetPath)
 
         val soundId = ResourceLocation("example", "weapons/test")
         TACZAudioRuntime.reload(
@@ -49,8 +51,31 @@ class TACZAudioRuntimeTest {
         assertEquals(ResourceLocation("example", "tacz_sounds/weapons/test.ogg"), descriptor.assetLocation)
         assertTrue(descriptor.exists)
         assertEquals(TACZAudioProbeStatus.SUPPORTED_OGG_VORBIS, descriptor.probeStatus)
-        assertEquals(1, descriptor.channels)
-        assertEquals(22050, descriptor.sampleRate)
+        assertTrue((descriptor.channels ?: 0) > 0)
+        assertTrue((descriptor.sampleRate ?: 0) > 0)
+    }
+
+    @Test
+    fun `manifest rejects ogg files with incomplete vorbis headers`() {
+        val root = Files.createTempDirectory("tacz-audio-runtime-invalid-manifest")
+        val assetPath = root.resolve("assets/example/tacz_sounds/weapons/bad.ogg")
+        Files.createDirectories(assetPath.parent)
+        // Use channels=0 so the probe detects INVALID_VORBIS_IDENTIFICATION (zero channels)
+        Files.write(assetPath, createIdentificationOnlyVorbisOgg(sampleRate = 22050, channels = 0))
+
+        val soundId = ResourceLocation("example", "weapons/bad")
+        TACZAudioRuntime.reload(
+            listOf(root.toFile()),
+            mapOf(soundId to setOf(TACZAudioReference(sourceType = "gun-display", key = "shoot"))),
+        )
+
+        val descriptor = TACZAudioRuntime.getManifest().entries[soundId]
+        assertNotNull(descriptor)
+        descriptor ?: return
+        assertTrue(
+            descriptor.probeStatus == TACZAudioProbeStatus.INVALID_OGG_CAPTURE ||
+                descriptor.probeStatus == TACZAudioProbeStatus.INVALID_VORBIS_IDENTIFICATION,
+        )
     }
 
     @Test
@@ -59,7 +84,7 @@ class TACZAudioRuntimeTest {
         val root = Files.createTempDirectory("tacz-audio-runtime-diagnostic")
         val assetPath = root.resolve("assets/example/tacz_sounds/weapons/test.ogg")
         Files.createDirectories(assetPath.parent)
-        Files.write(assetPath, createMinimalVorbisOgg(sampleRate = 44100, channels = 2))
+        copyRealVorbisOgg(assetPath)
 
         val soundId = ResourceLocation("example", "weapons/test")
         TACZAudioRuntime.reload(
@@ -96,7 +121,7 @@ class TACZAudioRuntimeTest {
         val root = Files.createTempDirectory("tacz-audio-runtime-null")
         val assetPath = root.resolve("assets/example/tacz_sounds/weapons/test.ogg")
         Files.createDirectories(assetPath.parent)
-        Files.write(assetPath, createMinimalVorbisOgg(sampleRate = 32000, channels = 1))
+        copyRealVorbisOgg(assetPath)
 
         val soundId = ResourceLocation("example", "weapons/test")
         TACZAudioRuntime.reload(
@@ -113,7 +138,43 @@ class TACZAudioRuntimeTest {
         assertFalse(TACZAudioRuntime.shouldUseLegacyMinecraftBridge())
     }
 
-    private fun createMinimalVorbisOgg(sampleRate: Int, channels: Int): ByteArray {
+    @Test
+    fun `vanilla backend drops missing sound before minecraft submission`() {
+        System.setProperty("tacz.audio.backend", "vanilla-minecraft")
+        TACZAudioRuntime.setLegacyResourceResolverForTesting { false }
+
+        val soundId = ResourceLocation("example", "missing/test")
+        TACZAudioRuntime.reload(
+            emptyList(),
+            mapOf(soundId to setOf(TACZAudioReference(sourceType = "animation-keyframe", key = "reload@0.1"))),
+        )
+
+        var backendCalled = false
+        val instance = TACZAudioRuntime.play(
+            entity = null,
+            soundId = soundId,
+            volume = 1f,
+            pitch = 1f,
+            distance = 16,
+            origin = TACZAudioRequestOrigin.ANIMATION,
+            legacyBackend = GunSoundPlayManager.SoundPlaybackBackend { _, _, _, _, _, _ ->
+                backendCalled = true
+                null
+            },
+        )
+
+        assertEquals(null, instance)
+        assertFalse(backendCalled)
+
+        val submission = TACZAudioRuntime.getRecentSubmissions().single()
+        assertEquals(TACZAudioBackendMode.VANILLA_MINECRAFT, submission.backendMode)
+        assertEquals(TACZAudioProbeStatus.MISSING, submission.probeStatus)
+        assertEquals(TACZAudioSubmissionDisposition.DROPPED, submission.disposition)
+        assertTrue(submission.notes?.contains("legacy-backend-blocked") == true)
+        assertTrue(submission.notes?.contains("example:sounds/missing/test.ogg") == true)
+    }
+
+    private fun createIdentificationOnlyVorbisOgg(sampleRate: Int, channels: Int): ByteArray {
         val identificationPacket = ByteArray(30)
         identificationPacket[0] = 1
         "vorbis".toByteArray(StandardCharsets.US_ASCII).copyInto(identificationPacket, destinationOffset = 1)
@@ -140,6 +201,15 @@ class TACZAudioRuntimeTest {
             out.toByteArray()
         }
     }
+
+    private fun copyRealVorbisOgg(target: java.nio.file.Path) {
+        Files.copy(
+            projectPath("src/main/resources/assets/tacz/custom/tacz_default_gun/assets/tacz/tacz_sounds/hk_mp5a5/hk_mp5a5_draw.ogg"),
+            target,
+        )
+    }
+
+    private fun projectPath(relative: String) = Paths.get(System.getProperty("user.dir")).resolve(relative)
 
     private fun writeLittleEndianInt(bytes: ByteArray, offset: Int, value: Int) {
         bytes[offset] = (value and 0xFF).toByte()

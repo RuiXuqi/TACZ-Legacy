@@ -1,8 +1,9 @@
 package com.tacz.legacy.client.audio
 
 import com.tacz.legacy.TACZLegacy
-import com.tacz.legacy.client.sound.GunSoundInstance
+import com.tacz.legacy.client.sound.TACZClientSoundHandle
 import com.tacz.legacy.client.sound.GunSoundPlayManager
+import net.minecraft.client.Minecraft
 import net.minecraft.entity.Entity
 import net.minecraft.util.ResourceLocation
 import org.apache.logging.log4j.Marker
@@ -26,6 +27,14 @@ internal object TACZAudioRuntime {
     @Volatile
     private var manifest: TACZAudioManifest = TACZAudioManifest(emptyMap())
 
+    @Volatile
+    private var legacyResourceResolverForTesting: ((ResourceLocation) -> Boolean)? = null
+
+    @JvmStatic
+    fun setLegacyResourceResolverForTesting(resolver: ((ResourceLocation) -> Boolean)?) {
+        legacyResourceResolverForTesting = resolver
+    }
+
     @JvmStatic
     fun reload(
         packSources: List<File>,
@@ -36,11 +45,16 @@ internal object TACZAudioRuntime {
             recentSubmissions.clear()
         }
         focusedSmokeRequestKeys.clear()
+        when (resolveBackendMode()) {
+            TACZAudioBackendMode.DIRECT_OPENAL -> TACZOpenALSoundEngine.reload(packSources, manifest)
+            else -> TACZOpenALSoundEngine.clear()
+        }
         logManifestSummary(manifest)
     }
 
     @JvmStatic
     fun clear() {
+        TACZOpenALSoundEngine.clear()
         manifest = TACZAudioManifest(emptyMap())
         synchronized(recentSubmissions) {
             recentSubmissions.clear()
@@ -57,7 +71,7 @@ internal object TACZAudioRuntime {
     }
 
     @JvmStatic
-    fun shouldUseLegacyMinecraftBridge(): Boolean = resolveBackendMode() == TACZAudioBackendMode.LEGACY_MINECRAFT
+    fun shouldUseLegacyMinecraftBridge(): Boolean = resolveBackendMode() == TACZAudioBackendMode.VANILLA_MINECRAFT
 
     @JvmStatic
     fun play(
@@ -68,12 +82,29 @@ internal object TACZAudioRuntime {
         distance: Int,
         origin: TACZAudioRequestOrigin,
         legacyBackend: GunSoundPlayManager.SoundPlaybackBackend,
-    ): GunSoundInstance? {
+    ): TACZClientSoundHandle? {
         val backendMode = resolveBackendMode()
         val descriptor = manifest.entries[soundId]
         return when (backendMode) {
-            TACZAudioBackendMode.LEGACY_MINECRAFT -> {
-                val instance = legacyBackend.play(entity, soundId, volume, pitch, distance, origin)
+            TACZAudioBackendMode.DIRECT_OPENAL -> {
+                val notes = buildString {
+                    if (descriptor == null) {
+                        append("direct-openal-untracked")
+                    } else if (!descriptor.probeStatus.dedicatedCompatible || descriptor.assetLocation == null || !descriptor.exists) {
+                        append("direct-openal-blocked")
+                    } else {
+                        append("direct-openal-submission")
+                    }
+                    descriptor?.notes?.let {
+                        append("; ")
+                        append(it)
+                    }
+                }
+                val instance = if (descriptor != null && descriptor.probeStatus.dedicatedCompatible && descriptor.assetLocation != null && descriptor.exists) {
+                    TACZOpenALSoundEngine.play(entity, soundId, volume, pitch, distance)
+                } else {
+                    null
+                }
                 recordSubmission(
                     TACZAudioSubmissionRecord(
                         origin = origin,
@@ -85,13 +116,31 @@ internal object TACZAudioRuntime {
                         } else {
                             TACZAudioSubmissionDisposition.DROPPED
                         },
-                        notes = buildString {
-                            append("legacy-backend-submission")
-                            descriptor?.notes?.let {
-                                append("; ")
-                                append(it)
-                            }
+                        notes = notes,
+                    )
+                )
+                instance
+            }
+
+            TACZAudioBackendMode.VANILLA_MINECRAFT -> {
+                val legacyGate = evaluateVanillaBackendGate(soundId, descriptor)
+                val instance = if (legacyGate.allowed) {
+                    legacyBackend.play(entity, soundId, volume, pitch, distance, origin)
+                } else {
+                    null
+                }
+                recordSubmission(
+                    TACZAudioSubmissionRecord(
+                        origin = origin,
+                        soundId = soundId,
+                        backendMode = backendMode,
+                        probeStatus = descriptor?.probeStatus ?: TACZAudioProbeStatus.UNTRACKED,
+                        disposition = if (instance != null) {
+                            TACZAudioSubmissionDisposition.SUBMITTED_TO_BACKEND
+                        } else {
+                            TACZAudioSubmissionDisposition.DROPPED
                         },
+                        notes = legacyGate.notes,
                     )
                 )
                 instance
@@ -135,6 +184,62 @@ internal object TACZAudioRuntime {
 
     private fun resolveBackendMode(): TACZAudioBackendMode =
         TACZAudioBackendMode.fromProperty(System.getProperty(BACKEND_PROPERTY))
+
+    private fun evaluateVanillaBackendGate(
+        soundId: ResourceLocation,
+        descriptor: TACZAudioAssetDescriptor?,
+    ): VanillaBackendGate {
+        val baseNotes = mutableListOf<String>()
+        descriptor?.notes?.let(baseNotes::add)
+
+        val probeStatus = descriptor?.probeStatus ?: TACZAudioProbeStatus.UNTRACKED
+        return when (probeStatus) {
+            TACZAudioProbeStatus.SUPPORTED_OGG_VORBIS -> VanillaBackendGate(
+                allowed = true,
+                notes = (listOf("legacy-backend-submission") + baseNotes).joinToString("; "),
+            )
+
+            TACZAudioProbeStatus.MISSING,
+            TACZAudioProbeStatus.UNTRACKED,
+            -> {
+                val fallbackAsset = resolveVanillaAssetLocation(soundId)
+                if (legacyResourceExists(fallbackAsset)) {
+                    VanillaBackendGate(
+                        allowed = true,
+                        notes = (listOf("legacy-backend-submission", "classpath-fallback=$fallbackAsset") + baseNotes).joinToString("; "),
+                    )
+                } else {
+                    VanillaBackendGate(
+                        allowed = false,
+                        notes = (listOf("legacy-backend-blocked", fallbackAsset.toString()) + baseNotes).joinToString("; "),
+                    )
+                }
+            }
+
+            else -> VanillaBackendGate(
+                allowed = false,
+                notes = (listOf("legacy-backend-blocked", "status=$probeStatus") + baseNotes).joinToString("; "),
+            )
+        }
+    }
+
+    private fun resolveVanillaAssetLocation(soundId: ResourceLocation): ResourceLocation =
+        ResourceLocation(soundId.namespace, "sounds/${soundId.path}.ogg")
+
+    private fun legacyResourceExists(assetLocation: ResourceLocation): Boolean {
+        legacyResourceResolverForTesting?.let { resolver ->
+            return resolver(assetLocation)
+        }
+        return try {
+            Minecraft.getMinecraft()?.resourceManager?.getResource(assetLocation) != null
+        } catch (_: NoClassDefFoundError) {
+            false
+        } catch (_: IllegalStateException) {
+            false
+        } catch (_: Exception) {
+            false
+        }
+    }
 
     private fun isPreflightEnabled(): Boolean =
         System.getProperty(PREFLIGHT_PROPERTY, if (isFocusedSmokeEnabled()) "true" else "false").toBoolean()
@@ -250,4 +355,9 @@ internal object TACZAudioRuntime {
             )
         }
     }
+
+    private data class VanillaBackendGate(
+        val allowed: Boolean,
+        val notes: String,
+    )
 }

@@ -18,43 +18,54 @@
 
 ## 当前落地状态（2026-03-08）
 
-本方案的**阶段 A/B 已完成落地**，当前仓库状态不再只是设计稿：
+本方案的**阶段 A/B/C 已完成落地**，当前仓库状态不再只是设计稿：
 
 - `GunSoundPlayManager -> TACZAudioRuntime` 的统一 facade 已建立，动画音效与 `ServerMessageSound` 都经统一入口提交。
 - reload 阶段已具备 manifest / probe / preflight 能力，能在 focused smoke 中输出音频清单、兼容性与请求来源摘要。
-- `diagnostic` / `null` backend 已可用于 smoke / CI，focused smoke 默认可在不真实播放声音的情况下验证音频链路。
-- `GunPackSoundResourcePack` 仍保留，但已经降级为 `legacy-minecraft` fallback；TACZ 专用音频主链不再把 `refreshResources()` 视为默认常规路径。
+- `diagnostic` / `null` backend 已可用于 smoke / CI，focused smoke 仍可在不真实播放声音的情况下验证音频链路。
+- `6302dff23e380f4e7b1d54395723f9d4bfc04277` 之前那套可用的“预解码 + 直出 OpenAL”思路已经恢复为当前主路径：新增 `TACZOpenALSoundEngine`，在资源 reload 后直接把 pack-backed `ogg` 通过 JOrbis 解成 PCM 并缓存到 OpenAL buffer，真实枪包音频不再依赖 `SoundHandler + CodecJOrbis`。
+- `legacy-minecraft` / `legacy` / `minecraft` 属性别名当前都解析到恢复后的 `direct_openal` 主后端；旧 `SoundHandler` 路线改为显式 `vanilla-minecraft` 调试回退，`GunPackSoundResourcePack` 也只在这一显式回退模式下启用。
+- 2026-03-08 本轮重新检索时发现当前工作树曾被**部分破坏/回退**：`TACZOpenALSoundEngine` 文件仍在，但 `TACZAudioTypes`、`TACZAudioRuntime`、`GunSoundPlayManager`、`ClientProxy` 的关键接线被退回到旧 `legacy-minecraft -> SoundHandler` 主链。本轮已把这些接线重新补回，当前工作树重新回到“direct OpenAL 为默认可听主链”的状态。
 
-当前**仍未完成**的内容：
+### 本轮实机验证结论（2026-03-08）
 
-- dedicated playback backend（真正可听、但不依赖 `SoundHandler` 的专用播放后端）
-- decode / normalize / cache 主链
-- 对剩余不兼容 / 缺失音频资源的分类处置策略
+针对“**工作区代码库部分内容被破坏，音频代码需要重新验证**”这一轮要求，已经完成四层验证：
 
-### 新一轮实机对比结论（2026-03-08）
+1. **代码重审**：确认 animation keyframe 链 `ObjectAnimationSoundChannel -> GunSoundPlayManager -> TACZAudioRuntime` 仍完整，真正回退的是 backend 末端接线
+2. **主源码编译**：`./gradlew --no-daemon compileKotlin compileJava`
+3. **坏状态复现 smoke**：`build/smoke-tests/runclient-focused-smoke-20260308-190244.log`
+4. **修复后实机 smoke**：`build/smoke-tests/runclient-focused-smoke-20260308-190637.log`
 
-针对“**武器没音效**”这一轮反馈，已经额外做了两类验证：
+结论已经更新为：
 
-1. **focused smoke / diagnostic**：用于证明请求是否真的提交到了 `TACZAudioRuntime`
-2. **focused smoke / legacy-minecraft**：用于证明默认可听后端当前到底是“没接到请求”，还是“接到了请求但旧后端仍可能失败”
+- 当前工作树在修复前，的确已经重新退回旧 `SoundHandler` 主链：坏状态 smoke `runclient-focused-smoke-20260308-190244.log` 明确打出 `backend=legacy_minecraft`，随后再次触发 `CodecJOrbis` / `Unable to acquire inputstream in method 'initialize'`，并以 `runClient` 退出码 `137` 结束。
+- 本轮已把默认可听主链重新拉回 `direct_openal`，并重新注册了 client tick 音频钩子，让 `TACZOpenALSoundEngine` 的 deferred reload / source cleanup 真正在运行时生效。
+- `./gradlew --no-daemon compileKotlin compileJava` 已通过，证明本轮音频主链改动在当前工作树中能够正确编译。
+- 重新执行定向 Gradle 测试时，`compileTestKotlin` 仍被**无关音频**的并行测试阻塞（`LegacyClientShootCoordinatorBurstStateTest` 与 `MathUtilFovTest` 的 unresolved）；但此前属于音频回退所致的 unresolved —— `DIRECT_OPENAL`、`VANILLA_MINECRAFT`、`setLegacyResourceResolverForTesting` —— 已全部消失，说明音频 API/enum/runtime 接口已经重新对齐。
+- 修复后的 focused smoke `runclient-focused-smoke-20260308-190637.log` 已实机打出：
+  - `OpenAL direct audio ready: loaded=1515 failed=0 totalBuffers=1515`
+  - `Audio manifest ready: 1829 sounds (...), backend=direct_openal`
+   - `[FocusedSmoke] AUDIO_PLAYBACK_OBSERVED location=tacz:hk_mp5a5/hk_mp5a5_shoot class=TACZOpenALSoundHandle`
+   - `tacz:hk_mp5a5/hk_mp5a5_shoot`、`tacz:hk_mp5a5/hk_mp5a5_inspect_raise`、`tacz:hk_mp5a5/hk_mp5a5_inspect_cloth`、`tacz:hk_mp5a5/hk_mp5a5_reload_magout` 等请求均以 `backend=direct_openal result=SUBMITTED_TO_BACKEND` 进入真实后端
+   - `minecraft:p02_sm_mpapa5_raise`、`minecraft:weap_mpapa5_fire_first_plr_01` 这类缺失引用会在 direct backend 下被安全 `DROPPED`，不再把客户端拖死
+  - 最终 `[FocusedSmoke] PASS animation=true projectile=true explosion=true ...`
+- 对同一份 smoke log 的关键字复核已确认：**此前会把客户端拖死的 `CodecJOrbis` / `Error reading the header` / `Unable to acquire inputstream` 已不再出现。**
 
-结论已经比较明确：
+### 当前仍未完成的内容
 
-- **默认客户端在未显式设置 `tacz.audio.backend` 时，当前仍跑 `legacy-minecraft` backend。**
-- **“没音效”并不等于请求没有提交到 runtime。** 最新日志 `build/smoke-tests/runclient-focused-smoke-20260308-032140.log` 已证明：
-   - `ServerMessageSound` 的合成广播请求 `tacz:hk_mp5a5/hk_mp5a5_shoot` 已进入 `TACZAudioRuntime`，并被提交到 `legacy-minecraft` backend。
-   - 动画音效请求 `minecraft:rpg7_reload_lower` 也已进入 `TACZAudioRuntime`，说明 animation / network 两条入口都已经统一接到了 runtime。
-- **当前真正的问题点在默认 playback backend 仍是旧 `SoundHandler` 路径，而且它会直接暴露资源缺失/旧解码链问题。** 同一份 `legacy-minecraft` smoke 日志里，`minecraft:rpg7_reload_lower` 在提交给原版声音栈后触发了：
-   - `SoundManager`: `Error in class 'CodecJOrbis'`
-   - `Unable to acquire inputstream in method 'initialize'`
-   - 随后 `runClient` 以 `137` 退出
-- `rpg7_reload_lower` 不是本轮 runtime 接线引入的新名字；它在上游 `TACZ` 的 `rpg7.animation.json` 中同样存在，但当前上下游资源树里都找不到对应的真实 `ogg`。这说明这里至少包含一类**上游内容/命名侧的缺失音频引用**，而不是单纯的 Legacy 运行时没接上。
+- `minecraft:*` 命名但实际上在 pack / classpath 中缺失的动画音效，仍会在 manifest 中被标成 `MISSING` 并在 direct backend 下 `DROPPED`；这类引用需要继续做分类处置，而不是继续把它们喂给旧声音栈。
+- normalize / cache 策略当前已经足以支撑 smoke 与主链播放，但长期仍可继续优化（例如更细粒度的缓存生命周期与资源统计）。
+- dedicated backend 的设计文档已从“待实现”切换为“已落地，需要继续文档化与边界收口”。
 
-换句话说，本轮已经把“**请求有没有到 runtime**”这个问题回答清楚了：**到了**。现在剩下的核心问题是：
+### vanilla fallback 防卡死补丁仍然保留
 
-- 默认客户端仍然依赖 `legacy-minecraft` 可听后端；
-- 该后端对缺失/不兼容资源仍会直接掉进 `SoundHandler + CodecJOrbis` 老链路；
-- dedicated backend 尚未落地之前，真实可听播放仍会被这条旧链路和资源缺失问题卡住。
+尽管主链已经切到 `direct_openal`，`TACZAudioRuntime` 对显式 `vanilla-minecraft` fallback 仍保留提交前防护：
+
+- `SUPPORTED_OGG_VORBIS`：允许继续提交到 `vanilla-minecraft`
+- `MISSING` / `UNTRACKED`：只有当 `Minecraft 1.12.2` 的资源管理器能够真实解析 `sounds/<path>.ogg` 时才允许提交；否则直接 `DROPPED`
+- `INVALID_OGG_CAPTURE` / `INVALID_VORBIS_IDENTIFICATION` / `IO_ERROR`：直接 `DROPPED`
+
+这意味着旧 `SoundHandler` 路径仍可作为调试回退，但已经不会再是默认 smoke / 默认可听主链。
 
 ### 提交状态语义约定
 
@@ -66,7 +77,20 @@
 
 这一区分很重要：它让 focused smoke 能明确回答“runtime 有没有收到请求”，同时避免把 legacy `SoundHandler` 下游的异步失败误记成“已播出”。
 
-也就是说：本阶段已经把“音频链会不会拖死 smoke、能不能先诊断清楚”解决到可控状态；但“完全脱离原版声音系统的可听专用播放后端”仍是下一阶段工作。
+也就是说：本阶段已经不只是“能诊断音频链是否收到请求”，而是**已经重新把当前工作树的可听主链恢复为 direct OpenAL，并再次用 in-world smoke 证明最终播放节点被调用**。后续工作重点不再是“实现 dedicated backend”，而是继续收口缺失引用分类、缓存生命周期和诊断文档。
+
+### 本轮验证补充
+
+- `get_errors` 对本轮音频改动文件返回 `No errors found`
+- `./gradlew --no-daemon compileKotlin compileJava` 通过；其中 `TACZAudioRuntime.kt` 只有一条无害的 Kotlin safe-call warning
+- 重新执行 `./gradlew --no-daemon test --tests '*TACZOpenALSoundEngineTest' --tests '*GunSoundParityTest' --tests '*TACZAudioRuntimeTest'` 时，当前阻塞已缩小为**与音频无关**的并行测试文件：`LegacyClientShootCoordinatorBurstStateTest.kt` 与 `MathUtilFovTest.kt`
+- focused smoke 运行过程中仍会看到 Forge 1.12 对现代 jar 的 ASM 扫描警告，但这些警告在本轮并未阻止进入世界、触发动画/射击或拿到最终 `PASS`；因此它们不再构成当前音频路径的阻塞
+
+因此，这一轮可以确认的是：
+
+- **当前工作树里被回退的 direct OpenAL 主链已经重新接回并通过主源码编译**
+- **最终播放 marker（`AUDIO_PLAYBACK_OBSERVED`）已在修复后的 in-world smoke 中再次出现**
+- **旧 `CodecJOrbis` 崩溃链已被本轮“先复现、后修复、再复测”完整关闭**
 
 ## 设计目标
 

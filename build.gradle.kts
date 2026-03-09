@@ -2,6 +2,7 @@ import org.jetbrains.gradle.ext.Gradle
 import org.jetbrains.gradle.ext.compiler
 import org.jetbrains.gradle.ext.runConfigurations
 import org.jetbrains.gradle.ext.settings
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 buildscript { 
     repositories {
@@ -73,6 +74,18 @@ kotlin {
 
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
+}
+
+tasks.named<JavaCompile>("compileJava") {
+    val compileKotlinTask = tasks.named<KotlinCompile>("compileKotlin")
+    dependsOn(compileKotlinTask)
+    classpath += files(compileKotlinTask.flatMap { it.destinationDirectory })
+}
+
+tasks.named<JavaCompile>("compileTestJava") {
+    val compileTestKotlinTask = tasks.named<KotlinCompile>("compileTestKotlin")
+    dependsOn(compileTestKotlinTask)
+    classpath += files(compileTestKotlinTask.flatMap { it.destinationDirectory })
 }
 
 configurations {
@@ -157,6 +170,12 @@ dependencies {
     implementation("org.luaj:luaj-jse:3.0.1")
     implementation("org.joml:joml:1.10.5")
     implementation("org.apache.commons:commons-math3:3.6.1")
+
+    // Bloom effect and depends
+    implementation(rfg.deobf("curse.maven:lumenized-1234162:6734060"))
+    implementation(rfg.deobf("curse.maven:ctm-267602:2915363"))
+    implementation(rfg.deobf("curse.maven:codechickenlib-242818:2779848"))
+
     testImplementation("junit:junit:4.13.2")
     
     if (use_assetmover.toBoolean()) {

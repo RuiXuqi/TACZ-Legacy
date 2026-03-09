@@ -77,6 +77,8 @@ public class GunDisplay {
     private MuzzleFlash muzzleFlash;
     @SerializedName("show_crosshair")
     private boolean showCrosshair = false;
+    @SerializedName("ammo_count_style")
+    private AmmoCountStyle ammoCountStyle = AmmoCountStyle.NORMAL;
     @SerializedName("text_show")
     private Map<String, TextShow> textShows = Maps.newHashMap();
 
@@ -186,6 +188,10 @@ public class GunDisplay {
 
     public boolean isShowCrosshair() {
         return showCrosshair;
+    }
+
+    public AmmoCountStyle getAmmoCountStyle() {
+        return ammoCountStyle;
     }
 
     public Map<String, TextShow> getTextShows() {

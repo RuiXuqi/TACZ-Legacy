@@ -43,7 +43,7 @@ public class ClientMessageUnloadAttachment() : IMessage, IMessageHandler<ClientM
             if (currentAttachment.isEmpty) {
                 return@addScheduledTask
             }
-            if (!player.inventory.addItemStackToInventory(currentAttachment.copy())) {
+            if (!player.capabilities.isCreativeMode && !player.inventory.addItemStackToInventory(currentAttachment.copy())) {
                 return@addScheduledTask
             }
             val unloadResult = LegacyGunRefitRuntime.unloadAttachment(gunStack, message.attachmentType) ?: return@addScheduledTask

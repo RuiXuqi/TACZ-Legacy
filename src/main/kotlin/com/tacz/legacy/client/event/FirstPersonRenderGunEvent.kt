@@ -3,17 +3,21 @@ package com.tacz.legacy.client.event
 import com.tacz.legacy.TACZLegacy
 import com.tacz.legacy.api.client.animation.statemachine.AnimationStateMachine
 import com.tacz.legacy.api.client.animation.statemachine.LuaAnimationStateMachine
+import com.tacz.legacy.api.client.other.KeepingItemRenderer
 import com.tacz.legacy.api.entity.IGunOperator
 import com.tacz.legacy.api.item.IGun
 import com.tacz.legacy.client.animation.statemachine.GunAnimationConstant
 import com.tacz.legacy.client.animation.statemachine.GunAnimationStateContext
+import com.tacz.legacy.client.animation.screen.RefitTransform
 import com.tacz.legacy.client.gameplay.LegacyClientGunAnimationDriver
 import com.tacz.legacy.client.model.BedrockAnimatedModel
 import com.tacz.legacy.client.model.BedrockGunModel
 import com.tacz.legacy.client.model.bedrock.BedrockPart
 import com.tacz.legacy.client.model.functional.MuzzleFlashRender
+import com.tacz.legacy.client.renderer.bloom.TACZBloomBridge
 import com.tacz.legacy.client.resource.GunDisplayInstance
 import com.tacz.legacy.client.resource.TACZClientAssetManager
+import com.tacz.legacy.mixin.minecraft.client.EntityRendererInvoker
 import com.tacz.legacy.common.resource.TACZGunPackPresentation
 import com.tacz.legacy.common.resource.TACZGunPackRuntimeRegistry
 import com.tacz.legacy.util.math.Easing
@@ -24,7 +28,6 @@ import net.minecraft.client.Minecraft
 import net.minecraft.client.entity.EntityPlayerSP
 import net.minecraft.client.renderer.GlStateManager
 import net.minecraft.util.EnumHand
-import net.minecraft.util.EnumHandSide
 import net.minecraft.util.ResourceLocation
 import net.minecraft.util.math.MathHelper
 import net.minecraftforge.client.event.EntityViewRenderEvent
@@ -39,6 +42,8 @@ import org.joml.Vector3f
 import org.lwjgl.BufferUtils
 import org.lwjgl.opengl.GL11
 import java.nio.FloatBuffer
+import kotlin.math.abs
+import kotlin.math.tan
 
 /**
  * 第一人称枪械渲染事件处理器。
@@ -49,14 +54,52 @@ import java.nio.FloatBuffer
  */
 @SideOnly(Side.CLIENT)
 internal object FirstPersonRenderGunEvent {
+    private data class PreparedFirstPersonRenderContext(
+        val frameId: Long,
+        val gunId: ResourceLocation,
+        val displayId: ResourceLocation,
+        val stack: net.minecraft.item.ItemStack,
+        val displayInstance: GunDisplayInstance,
+        val model: BedrockGunModel,
+        val registeredTexture: ResourceLocation,
+        val partialTicks: Float,
+        val aimingProgress: Float,
+        val refitScreenOpeningProgress: Float,
+    )
+
+    private data class RootNodeRenderState(
+        val offsetX: Float,
+        val offsetY: Float,
+        val offsetZ: Float,
+        val additionalQuaternion: Quaternionf,
+    )
+
+    private val tracerDebugEnabled: Boolean
+        get() = java.lang.Boolean.getBoolean("tacz.tracerDebug") ||
+            java.lang.Boolean.parseBoolean(System.getProperty("tacz.focusedSmoke.tracerDebug", "false"))
+
     private var lastStateMachine: AnimationStateMachine<*>? = null
     private var lastRenderedModel: BedrockAnimatedModel? = null
     private val positioningMatrixBuffer: FloatBuffer = BufferUtils.createFloatBuffer(16)
+    private val muzzleMatrixBuffer: FloatBuffer = BufferUtils.createFloatBuffer(16)
     private var loggedFirstPersonRender = false
+    private var cachedMuzzleRenderOffset: Vector3f? = null
+    private var cachedCameraPitch: Float? = null
+    private var cachedCameraYaw: Float? = null
+    private var cachedMuzzleGunId: ResourceLocation? = null
+    private var lastCameraAnimationLoggedShootTimestamp: Long = Long.MIN_VALUE
+    private var renderFrameId: Long = 0L
+    private var preparedRenderContext: PreparedFirstPersonRenderContext? = null
+    private val positioningFallbackWarnings = hashSetOf<String>()
+    private val exitingFirstPersonUpdateLogs = hashSetOf<String>()
+    private val firstPersonBloomLogs = hashSetOf<String>()
+    private val tracerDebugMuzzleLogs = hashSetOf<String>()
 
     // --- Procedural animation state (port of upstream FirstPersonRenderGunEvent) ---
     // SecondOrderDynamics for smooth aim transition
     private val aimingDynamics = SecondOrderDynamics(1.2f, 1.2f, 0.5f, 0f)
+    // Refit opening smoothing
+    private val refitOpeningDynamics = SecondOrderDynamics(1f, 1.2f, 0.5f, 0f)
     // Jumping sway dynamics
     private val jumpingDynamics = SecondOrderDynamics(0.28f, 1f, 0.65f, 0f)
     private const val JUMPING_Y_SWAY = -2f
@@ -85,149 +128,37 @@ internal object FirstPersonRenderGunEvent {
         MuzzleFlashRender.onShoot()
     }
 
+    @JvmStatic
+    internal fun getCachedMuzzleRenderOffset(): Vector3f? = cachedMuzzleRenderOffset?.let(::Vector3f)
+
+    @JvmStatic
+    internal fun getCachedCameraPitch(): Float? = cachedCameraPitch
+
+    @JvmStatic
+    internal fun getCachedCameraYaw(): Float? = cachedCameraYaw
+
+    @JvmStatic
+    internal fun getCachedMuzzleGunId(): ResourceLocation? = cachedMuzzleGunId
+
     @SubscribeEvent
     @JvmStatic
     internal fun onRenderHand(event: RenderSpecificHandEvent) {
         val player = Minecraft.getMinecraft().player ?: return
+        val renderedMainItem = KeepingItemRenderer.getRenderer()?.currentItem ?: player.heldItemMainhand
 
         // Only handle main hand
         if (event.hand != EnumHand.MAIN_HAND) {
-            val mainItem = player.heldItemMainhand
-            if (mainItem.item is IGun) {
+            if (renderedMainItem.item is IGun) {
                 event.isCanceled = true
             }
             return
         }
 
-        val stack = event.itemStack
-        val iGun = stack.item as? IGun ?: run {
-            lastStateMachine = null
-            lastRenderedModel = null
-            return
-        }
-        val gunId = iGun.getGunId(stack)
-        val handSide = player.primaryHand
-
-        // Resolve display instance
-        val snapshot = TACZGunPackRuntimeRegistry.getSnapshot()
-        val displayId = TACZGunPackPresentation.resolveGunDisplayId(snapshot, gunId) ?: return
-        val displayInstance = TACZClientAssetManager.getGunDisplayInstance(displayId) ?: return
-
-        val model: BedrockGunModel = displayInstance.gunModel ?: return
-
-        // Resolve texture
-        val textureLoc: ResourceLocation = displayInstance.modelTexture ?: return
-        val registeredTexture: ResourceLocation = TACZClientAssetManager.getTextureLocation(textureLoc) ?: return
-
-        val partialTicks = event.partialTicks
-
-        // --- State machine lifecycle ---
-        val sm: LuaAnimationStateMachine<GunAnimationStateContext>? = displayInstance.animationStateMachine
-
-        if (sm != lastStateMachine) {
-            lastStateMachine = sm
-        }
-
-        // Initialize state machine if needed
-        if (sm != null && !sm.isInitialized && sm.exitingTime < System.currentTimeMillis()) {
-            LegacyClientGunAnimationDriver.prepareContext(sm, stack, displayInstance, partialTicks)
-            sm.initialize()
-            sm.trigger(GunAnimationConstant.INPUT_DRAW)
-        }
-
-        // Update context and state machine
-        if (sm != null && sm.isInitialized) {
-            LegacyClientGunAnimationDriver.prepareContext(sm, stack, displayInstance, partialTicks)
-            sm.update()
-        }
-
-        // --- Compute aiming progress with SecondOrderDynamics smoothing ---
-        val rawAimingProgress = IGunOperator.fromLivingEntity(player).getSynAimingProgress()
-        val aimingProgress = aimingDynamics.update(rawAimingProgress)
-
-        // --- Apply procedural gun movements (shoot sway + jump sway) to root node ---
-        applyGunMovements(model, aimingProgress, partialTicks)
-
-        // --- Render ---
-        lastRenderedModel = model
-        GlStateManager.pushMatrix()
-        applyVanillaFirstPersonTransform(handSide, event.equipProgress, event.swingProgress)
-
-        // Apply view bob compensation — upstream subtracts xBob/yBob lerp from
-        // raw view angles; on 1.12 the equivalents are renderArmPitch / renderArmYaw.
-        val xBob = player.prevRenderArmPitch + (player.renderArmPitch - player.prevRenderArmPitch) * partialTicks
-        val yBob = player.prevRenderArmYaw + (player.renderArmYaw - player.prevRenderArmYaw) * partialTicks
-        val xRot = player.prevRotationPitch + (player.rotationPitch - player.prevRotationPitch) * partialTicks - xBob
-        val yRot = player.prevRotationYaw + (player.rotationYaw - player.prevRotationYaw) * partialTicks - yBob
-
-        // Apply view-rotation-driven tilt to poseStack (matches upstream poseStack.mulPose step)
-        GlStateManager.rotate(xRot * -0.1f, 1.0f, 0.0f, 0.0f)
-        GlStateManager.rotate(yRot * -0.1f, 0.0f, 1.0f, 0.0f)
-
-        val rootNode: BedrockPart? = model.rootNode
-        if (rootNode != null) {
-            val clampedXRot = Math.tanh((xRot / 25).toDouble()).toFloat() * 25f
-            val clampedYRot = Math.tanh((yRot / 25).toDouble()).toFloat() * 25f
-            rootNode.offsetX += clampedYRot * 0.1f / 16f / 3f
-            rootNode.offsetY += -clampedXRot * 0.1f / 16f / 3f
-            rootNode.additionalQuaternion.mul(
-                Quaternionf().rotateX(Math.toRadians((clampedXRot * 0.05f).toDouble()).toFloat())
-            )
-            rootNode.additionalQuaternion.mul(
-                Quaternionf().rotateY(Math.toRadians((clampedYRot * 0.05f).toDouble()).toFloat())
-            )
-        }
-
-        // Move from render origin (0, 24, 0) to model origin (0, 0, 0)
-        GlStateManager.translate(0.0f, 1.5f, 0.0f)
-        // Bedrock models are upside-down, flip
-        GlStateManager.rotate(180.0f, 0.0f, 0.0f, 1.0f)
-        // Apply idle/aiming positioning + animation constraint
-        applyFirstPersonPositioningTransform(model, stack, aimingProgress)
-        applyAnimationConstraintTransform(model, aimingProgress)
-
-        // Bind gun texture and render
-        Minecraft.getMinecraft().textureManager.bindTexture(registeredTexture)
-        displayInstance.setActiveGunTexture(registeredTexture)
-        model.renderHand = true
-
-        // Set up muzzle flash rendering for this frame
-        val muzzleFlashRender = model.muzzleFlashRender
-        if (muzzleFlashRender != null) {
-            MuzzleFlashRender.isSelf = true
-            val gunDisplay = TACZClientAssetManager.getGunDisplay(displayId)
-            muzzleFlashRender.setActiveMuzzleFlash(gunDisplay?.getMuzzleFlash())
-        }
-
-        GlStateManager.enableLighting()
-        GlStateManager.enableRescaleNormal()
-        GlStateManager.enableBlend()
-        GlStateManager.tryBlendFuncSeparate(
-            GlStateManager.SourceFactor.SRC_ALPHA,
-            GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA,
-            GlStateManager.SourceFactor.ONE,
-            GlStateManager.DestFactor.ZERO,
-        )
-
-        if (!loggedFirstPersonRender) {
-            TACZLegacy.logger.info("[FirstPersonRenderGunEvent] First-person render hook active for {}", gunId)
-            loggedFirstPersonRender = true
-        }
-
-        model.render(stack)
-        model.renderHand = false
-        MuzzleFlashRender.isSelf = false
-
-        GlStateManager.disableBlend()
-        GlStateManager.disableRescaleNormal()
-
-        // Clean animation transforms after render
-        model.cleanAnimationTransform()
-        model.cleanCameraAnimationTransform()
-
-        GlStateManager.popMatrix()
-
-        // Cancel vanilla rendering
+        val prepared = prepareFirstPersonRenderContext(event.partialTicks) ?: return
+        lastRenderedModel = prepared.model
+        renderPreparedFirstPersonModel(prepared, bloomOnly = false, inlineBloom = true)
+        prepared.model.cleanAnimationTransform()
+        preparedRenderContext = null
         event.isCanceled = true
     }
 
@@ -408,55 +339,311 @@ internal object FirstPersonRenderGunEvent {
         if (event.phase != TickEvent.Phase.START) {
             return
         }
+        renderFrameId += 1L
+        preparedRenderContext?.model?.cleanAnimationTransform()
+        preparedRenderContext = null
+        TACZBloomBridge.beginRenderFrame()
         val mc = Minecraft.getMinecraft()
         val player = mc.player ?: return
+        val renderedMainItem = KeepingItemRenderer.getRenderer()?.currentItem ?: player.heldItemMainhand
+        if (mc.gameSettings.thirdPersonView == 0 && renderedMainItem.item !is IGun) {
+            lastRenderedModel = null
+            cachedMuzzleRenderOffset = null
+        }
         if (mc.gameSettings.thirdPersonView != 0) {
             LegacyClientGunAnimationDriver.visualUpdateHeldGun(player, event.renderTickTime)
         }
         LegacyClientGunAnimationDriver.visualUpdateExitingAnimation(event.renderTickTime)
     }
 
-    private fun applyVanillaFirstPersonTransform(handSide: EnumHandSide, equipProgress: Float, swingProgress: Float) {
-        val side = if (handSide == EnumHandSide.RIGHT) 1 else -1
-        val swingRoot = MathHelper.sqrt(swingProgress)
-        val swayX = -0.4f * MathHelper.sin(swingRoot * Math.PI.toFloat())
-        val swayY = 0.2f * MathHelper.sin(swingRoot * ((Math.PI * 2.0).toFloat()))
-        val swayZ = -0.2f * MathHelper.sin(swingProgress * Math.PI.toFloat())
-        GlStateManager.translate(side * swayX, swayY, swayZ)
-        transformSideFirstPerson(handSide, equipProgress)
-        transformFirstPerson(handSide, swingProgress)
+    private fun prepareFirstPersonRenderContext(partialTicks: Float): PreparedFirstPersonRenderContext? {
+        preparedRenderContext?.let { cached ->
+            if (cached.frameId == renderFrameId) {
+                return cached
+            }
+        }
+
+        val player = Minecraft.getMinecraft().player ?: return null
+        val stack = KeepingItemRenderer.getRenderer()?.currentItem ?: player.heldItemMainhand
+        val iGun = stack.item as? IGun ?: run {
+            lastStateMachine = null
+            lastRenderedModel = null
+            cachedMuzzleRenderOffset = null
+            return null
+        }
+        val gunId = iGun.getGunId(stack)
+
+        val snapshot = TACZGunPackRuntimeRegistry.getSnapshot()
+        val displayId = TACZGunPackPresentation.resolveGunDisplayId(snapshot, gunId) ?: return null
+        val displayInstance = TACZClientAssetManager.getGunDisplayInstance(displayId) ?: return null
+        val model: BedrockGunModel = displayInstance.gunModel ?: return null
+
+        val textureLoc: ResourceLocation = displayInstance.modelTexture ?: return null
+        val registeredTexture: ResourceLocation = TACZClientAssetManager.getTextureLocation(textureLoc) ?: return null
+
+        val sm: LuaAnimationStateMachine<GunAnimationStateContext>? = displayInstance.animationStateMachine
+        val now = System.currentTimeMillis()
+
+        if (sm != lastStateMachine) {
+            lastStateMachine = sm
+        }
+
+        if (sm != null) {
+            LegacyClientGunAnimationDriver.prepareContext(sm, stack, displayInstance, partialTicks)
+            if (!sm.isInitialized && sm.exitingTime < now) {
+                sm.initialize()
+                sm.trigger(GunAnimationConstant.INPUT_DRAW)
+            } else if (!sm.isInitialized && sm.exitingTime >= now) {
+                logFocusedSmokeExitingFirstPersonUpdate(gunId, sm.exitingTime - now)
+            }
+            sm.update()
+        }
+
+        val refitScreenOpeningProgress = refitOpeningDynamics.update(RefitTransform.getOpeningProgress())
+        val rawAimingProgress = IGunOperator.fromLivingEntity(player).getSynAimingProgress()
+        val aimingProgress = aimingDynamics.update(rawAimingProgress)
+        applyGunMovements(model, aimingProgress, partialTicks)
+
+        return PreparedFirstPersonRenderContext(
+            frameId = renderFrameId,
+            gunId = gunId,
+            displayId = displayId,
+            stack = stack,
+            displayInstance = displayInstance,
+            model = model,
+            registeredTexture = registeredTexture,
+            partialTicks = partialTicks,
+            aimingProgress = aimingProgress,
+            refitScreenOpeningProgress = refitScreenOpeningProgress,
+        ).also {
+            preparedRenderContext = it
+        }
     }
 
-    private fun transformSideFirstPerson(handSide: EnumHandSide, equipProgress: Float) {
-        val side = if (handSide == EnumHandSide.RIGHT) 1 else -1
-        GlStateManager.translate(side * 0.56f, -0.52f + equipProgress * -0.6f, -0.72f)
+    private fun renderPreparedFirstPersonModel(
+        prepared: PreparedFirstPersonRenderContext,
+        bloomOnly: Boolean,
+        inlineBloom: Boolean = false,
+    ) {
+        val player = Minecraft.getMinecraft().player ?: return
+        val model = prepared.model
+        val gunId = prepared.gunId
+        val partialTicks = prepared.partialTicks
+
+        GlStateManager.pushMatrix()
+        val xBob = player.prevRenderArmPitch + (player.renderArmPitch - player.prevRenderArmPitch) * partialTicks
+        val yBob = player.prevRenderArmYaw + (player.renderArmYaw - player.prevRenderArmYaw) * partialTicks
+        val xRot = player.prevRotationPitch + (player.rotationPitch - player.prevRotationPitch) * partialTicks - xBob
+        val yRot = player.prevRotationYaw + (player.rotationYaw - player.prevRotationYaw) * partialTicks - yBob
+
+        GlStateManager.rotate(xRot * -0.1f, 1.0f, 0.0f, 0.0f)
+        GlStateManager.rotate(yRot * -0.1f, 0.0f, 1.0f, 0.0f)
+
+        val rootNode: BedrockPart? = model.rootNode
+        val rootSnapshot = rootNode?.let {
+            RootNodeRenderState(it.offsetX, it.offsetY, it.offsetZ, Quaternionf(it.additionalQuaternion))
+        }
+        if (rootNode != null) {
+            val clampedXRot = Math.tanh((xRot / 25).toDouble()).toFloat() * 25f
+            val clampedYRot = Math.tanh((yRot / 25).toDouble()).toFloat() * 25f
+            rootNode.offsetX += clampedYRot * 0.1f / 16f / 3f
+            rootNode.offsetY += -clampedXRot * 0.1f / 16f / 3f
+            rootNode.additionalQuaternion.mul(
+                Quaternionf().rotateX(Math.toRadians((clampedXRot * 0.05f).toDouble()).toFloat())
+            )
+            rootNode.additionalQuaternion.mul(
+                Quaternionf().rotateY(Math.toRadians((clampedYRot * 0.05f).toDouble()).toFloat())
+            )
+        }
+
+        try {
+            GlStateManager.translate(0.0f, 1.5f, 0.0f)
+            GlStateManager.rotate(180.0f, 0.0f, 0.0f, 1.0f)
+            applyFirstPersonPositioningTransform(
+                model,
+                prepared.stack,
+                gunId,
+                prepared.aimingProgress,
+                prepared.refitScreenOpeningProgress,
+            )
+            applyAnimationConstraintTransform(model, prepared.aimingProgress * (1.0f - prepared.refitScreenOpeningProgress))
+
+            Minecraft.getMinecraft().textureManager.bindTexture(prepared.registeredTexture)
+            prepared.displayInstance.setActiveGunTexture(prepared.registeredTexture)
+            val renderHand = model.renderHand
+            model.renderHand = RefitTransform.getOpeningProgress() == 0.0f
+
+            if (!bloomOnly) {
+                val muzzleFlashRender = model.muzzleFlashRender
+                if (muzzleFlashRender != null) {
+                    MuzzleFlashRender.isSelf = true
+                    val gunDisplay = TACZClientAssetManager.getGunDisplay(prepared.displayId)
+                    muzzleFlashRender.setActiveMuzzleFlash(gunDisplay?.getMuzzleFlash())
+                }
+            }
+
+            GlStateManager.enableLighting()
+            GlStateManager.enableRescaleNormal()
+            GlStateManager.enableBlend()
+            GlStateManager.tryBlendFuncSeparate(
+                GlStateManager.SourceFactor.SRC_ALPHA,
+                GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA,
+                GlStateManager.SourceFactor.ONE,
+                GlStateManager.DestFactor.ZERO,
+            )
+
+            try {
+                if (!bloomOnly && !loggedFirstPersonRender) {
+                    TACZLegacy.logger.info("[FirstPersonRenderGunEvent] First-person render hook active for {}", gunId)
+                    loggedFirstPersonRender = true
+                }
+
+                if (bloomOnly) {
+                    logFocusedSmokeFirstPersonBloom(gunId)
+                }
+
+                if (!bloomOnly) {
+                    model.render(prepared.stack)
+                    cacheMuzzleRenderOffset(model, partialTicks)
+                    if (inlineBloom) {
+                        val renderedInlineBloom = TACZBloomBridge.renderInlineFirstPersonBloom(prepared.registeredTexture) {
+                            model.renderBloom(prepared.stack)
+                        }
+                        if (renderedInlineBloom) {
+                            logFocusedSmokeFirstPersonBloom(gunId)
+                        }
+                    }
+                } else {
+                    model.renderBloom(prepared.stack)
+                }
+            } finally {
+                model.renderHand = renderHand
+                if (!bloomOnly) {
+                    MuzzleFlashRender.isSelf = false
+                }
+                GlStateManager.disableBlend()
+                GlStateManager.disableRescaleNormal()
+            }
+        } finally {
+            restoreRootNodeRenderState(rootNode, rootSnapshot)
+            GlStateManager.popMatrix()
+        }
     }
 
-    private fun transformFirstPerson(handSide: EnumHandSide, swingProgress: Float) {
-        val side = if (handSide == EnumHandSide.RIGHT) 1 else -1
-        val swingSin = MathHelper.sin(swingProgress * swingProgress * Math.PI.toFloat())
-        GlStateManager.rotate(side * (45.0f + swingSin * -20.0f), 0.0f, 1.0f, 0.0f)
-        val swingRootSin = MathHelper.sin(MathHelper.sqrt(swingProgress) * Math.PI.toFloat())
-        GlStateManager.rotate(side * swingRootSin * -20.0f, 0.0f, 0.0f, 1.0f)
-        GlStateManager.rotate(swingRootSin * -80.0f, 1.0f, 0.0f, 0.0f)
-        GlStateManager.rotate(side * -45.0f, 0.0f, 1.0f, 0.0f)
+    private fun restoreRootNodeRenderState(rootNode: BedrockPart?, snapshot: RootNodeRenderState?) {
+        if (rootNode == null || snapshot == null) {
+            return
+        }
+        rootNode.offsetX = snapshot.offsetX
+        rootNode.offsetY = snapshot.offsetY
+        rootNode.offsetZ = snapshot.offsetZ
+        rootNode.additionalQuaternion.set(snapshot.additionalQuaternion)
     }
 
-    private fun applyFirstPersonPositioningTransform(model: BedrockGunModel, stack: net.minecraft.item.ItemStack, aimingProgress: Float) {
+    private fun applyFirstPersonPositioningTransform(
+        model: BedrockGunModel,
+        stack: net.minecraft.item.ItemStack,
+        gunId: ResourceLocation,
+        aimingProgress: Float,
+        refitScreenOpeningProgress: Float,
+    ) {
+        val rawIdlePath = FirstPersonRenderMatrices.fromBedrockPath(model.idleSightPath)
+        val rawAimingPath = FirstPersonRenderMatrices.fromBedrockPath(model.resolveAimingViewPath(stack))
+        val resolvedPaths = FirstPersonRenderMatrices.resolvePositioningPaths(rawIdlePath, rawAimingPath)
+        logPositioningFallbacks(gunId, resolvedPaths)
+
+        val idlePath = resolvedPaths.idlePath
+            ?: failFirstPersonPositioning(gunId, "Missing both idle_view and aiming first-person positioning paths")
+        val aimingPath = resolvedPaths.aimingPath
+            ?: failFirstPersonPositioning(gunId, "Missing both idle_view and aiming first-person positioning paths")
+
+        val baseBlendWeight = (1.0f - refitScreenOpeningProgress).coerceIn(0.0f, 1.0f)
+        val clampedAimingProgress = aimingProgress.coerceIn(0.0f, 1.0f)
+        val refitTransformProgress = Easing.easeOutCubic(RefitTransform.getTransformProgress().toDouble()).toFloat()
+        val fromRefitMatrix = FirstPersonRenderMatrices.buildPositioningNodeInverse(
+            FirstPersonRenderMatrices.fromBedrockPath(model.getRefitAttachmentViewPath(RefitTransform.getOldTransformType())),
+        )
+        val toRefitMatrix = FirstPersonRenderMatrices.buildPositioningNodeInverse(
+            FirstPersonRenderMatrices.fromBedrockPath(model.getRefitAttachmentViewPath(RefitTransform.getCurrentTransformType())),
+        )
+
+        fun applyRefitPositioning(matrix: Matrix4f) {
+            applyFiniteMatrixLerp(
+                gunId = gunId,
+                fromMatrix = matrix,
+                toMatrix = fromRefitMatrix,
+                resultMatrix = matrix,
+                alpha = refitScreenOpeningProgress.coerceIn(0.0f, 1.0f),
+                reason = "refit opening positioning lerp",
+            )
+            applyFiniteMatrixLerp(
+                gunId = gunId,
+                fromMatrix = matrix,
+                toMatrix = toRefitMatrix,
+                resultMatrix = matrix,
+                alpha = (refitScreenOpeningProgress * refitTransformProgress).coerceIn(0.0f, 1.0f),
+                reason = "refit focus positioning lerp",
+            )
+        }
+
+        fun buildStagedFallbackMatrix(): Matrix4f {
+            val fallbackMatrix = Matrix4f().identity()
+            val idleViewMatrix = FirstPersonRenderMatrices.buildPositioningNodeInverse(idlePath)
+            val aimingViewMatrix = FirstPersonRenderMatrices.buildPositioningNodeInverse(aimingPath)
+            applyFiniteMatrixLerp(
+                gunId = gunId,
+                fromMatrix = fallbackMatrix,
+                toMatrix = idleViewMatrix,
+                resultMatrix = fallbackMatrix,
+                alpha = baseBlendWeight,
+                reason = "staged idle positioning lerp",
+            )
+            applyFiniteMatrixLerp(
+                gunId = gunId,
+                fromMatrix = fallbackMatrix,
+                toMatrix = aimingViewMatrix,
+                resultMatrix = fallbackMatrix,
+                alpha = (baseBlendWeight * clampedAimingProgress).coerceIn(0.0f, 1.0f),
+                reason = "staged aiming positioning lerp",
+            )
+            applyRefitPositioning(fallbackMatrix)
+            return fallbackMatrix
+        }
+
+        val baseAimingMatrix = FirstPersonRenderMatrices.buildAimingPositioningTransform(
+            idlePath = idlePath,
+            aimingPath = aimingPath,
+            aimingProgress = clampedAimingProgress,
+        )
         val transformMatrix = Matrix4f().identity()
-        val idlePath = model.idleSightPath
-        val aimingPath = model.resolveAimingViewPath(stack)
+        if (FirstPersonRenderMatrices.isFinite(baseAimingMatrix)) {
+            applyFiniteMatrixLerp(
+                gunId = gunId,
+                fromMatrix = transformMatrix,
+                toMatrix = baseAimingMatrix,
+                resultMatrix = transformMatrix,
+                alpha = baseBlendWeight,
+                reason = "primary base positioning lerp",
+            )
+            applyRefitPositioning(transformMatrix)
+        } else {
+            logPositioningFallback(
+                gunId,
+                "primary aiming interpolation produced non-finite matrix, falling back to staged lerp",
+            )
+            transformMatrix.set(buildStagedFallbackMatrix())
+        }
 
-        val idleViewMatrix = FirstPersonRenderMatrices.buildPositioningNodeInverse(
-            FirstPersonRenderMatrices.fromBedrockPath(idlePath)
-        )
-        val aimingViewMatrix = FirstPersonRenderMatrices.buildPositioningNodeInverse(
-            FirstPersonRenderMatrices.fromBedrockPath(aimingPath)
-        )
-        // Apply idle positioning (weight = 1)
-        MathUtil.applyMatrixLerp(transformMatrix, idleViewMatrix, transformMatrix, 1f)
-        // Blend towards aiming positioning
-        MathUtil.applyMatrixLerp(transformMatrix, aimingViewMatrix, transformMatrix, aimingProgress)
+        if (!FirstPersonRenderMatrices.isFinite(transformMatrix)) {
+            logPositioningFallback(
+                gunId,
+                "final first-person positioning matrix was non-finite, retrying with staged lerp fallback",
+            )
+            transformMatrix.set(buildStagedFallbackMatrix())
+        }
+        if (!FirstPersonRenderMatrices.isFinite(transformMatrix)) {
+            failFirstPersonPositioning(gunId, "Computed non-finite first-person positioning matrix after staged fallback")
+        }
 
         GlStateManager.translate(0.0f, 1.5f, 0.0f)
         positioningMatrixBuffer.clear()
@@ -481,6 +668,8 @@ internal object FirstPersonRenderGunEvent {
         event.yaw = yaw
         event.pitch = pitch
         event.roll = roll
+        cachedCameraYaw = yaw
+        cachedCameraPitch = pitch
     }
 
     /**
@@ -502,6 +691,181 @@ internal object FirstPersonRenderGunEvent {
                 (1 - 2 * (q.y() * q.y() + q.z() * q.z())).toDouble()
             )
         ).toFloat()
+        if (System.getProperty("tacz.focusedSmoke", "false").toBoolean()
+            && shootTimeStamp > 0L
+            && lastCameraAnimationLoggedShootTimestamp != shootTimeStamp
+            && (abs(yawDelta) > 0.01f || abs(pitchDelta) > 0.01f || abs(rollDelta) > 0.01f)
+        ) {
+            lastCameraAnimationLoggedShootTimestamp = shootTimeStamp
+            TACZLegacy.logger.info(
+                "[FocusedSmoke] CAMERA_ANIMATION_APPLIED shootTimestamp={} yawDelta={} pitchDelta={} rollDelta={}",
+                shootTimeStamp,
+                "%.3f".format(yawDelta),
+                "%.3f".format(pitchDelta),
+                "%.3f".format(rollDelta),
+            )
+        }
+        model.cleanCameraAnimationTransform()
         return Triple(yaw + yawDelta, pitch + pitchDelta, roll + rollDelta)
+    }
+
+    private fun cacheMuzzleRenderOffset(model: BedrockGunModel, partialTicks: Float) {
+        val muzzlePath = model.muzzleFlashPosPath
+        if (muzzlePath == null || muzzlePath.isEmpty()) {
+            cachedMuzzleRenderOffset = null
+            cachedMuzzleGunId = null
+            return
+        }
+        GlStateManager.pushMatrix()
+        try {
+            muzzlePath.forEach(BedrockPart::translateAndRotateAndScale)
+            muzzleMatrixBuffer.clear()
+            GL11.glGetFloat(GL11.GL_MODELVIEW_MATRIX, muzzleMatrixBuffer)
+            muzzleMatrixBuffer.rewind()
+            val poseMatrix = Matrix4f()
+            poseMatrix.set(muzzleMatrixBuffer)
+            val zFovScale = resolveItemToWorldFovScale(partialTicks)
+            cachedMuzzleRenderOffset = Vector3f(poseMatrix.m30(), poseMatrix.m31(), poseMatrix.m32() * zFovScale)
+            cachedMuzzleGunId = model.currentGunItem.takeIf { !it.isEmpty }?.let {
+                (it.item as? IGun)?.getGunId(it)
+            }
+            logTracerDebugMuzzleOffset(partialTicks, zFovScale)
+        } finally {
+            GlStateManager.popMatrix()
+        }
+    }
+
+    private fun logTracerDebugMuzzleOffset(partialTicks: Float, zFovScale: Float) {
+        if (!tracerDebugEnabled) {
+            return
+        }
+        val offset = cachedMuzzleRenderOffset ?: return
+        val gunId = cachedMuzzleGunId ?: ResourceLocation(TACZLegacy.MOD_ID, "unknown")
+        val key = buildString {
+            append(gunId)
+            append('|')
+            append("x=")
+            append("%.3f".format(offset.x))
+            append('|')
+            append("y=")
+            append("%.3f".format(offset.y))
+            append('|')
+            append("z=")
+            append("%.3f".format(offset.z))
+            append('|')
+            append("pitch=")
+            append("%.3f".format(cachedCameraPitch ?: 0.0f))
+            append('|')
+            append("yaw=")
+            append("%.3f".format(cachedCameraYaw ?: 0.0f))
+        }
+        if (!tracerDebugMuzzleLogs.add(key)) {
+            return
+        }
+        val renderer = Minecraft.getMinecraft().entityRenderer as? EntityRendererInvoker
+        val itemRenderFov = renderer?.`tacz$invokeGetFOVModifier`(partialTicks, false) ?: 0.0f
+        val worldRenderFov = renderer?.`tacz$invokeGetFOVModifier`(partialTicks, true) ?: 0.0f
+        TACZLegacy.logger.info(
+            "[TracerDebug] MUZZLE_OFFSET gun={} offset=({},{},{}) cameraYaw={} cameraPitch={} itemFov={} worldFov={} zScale={}",
+            gunId,
+            "%.4f".format(offset.x),
+            "%.4f".format(offset.y),
+            "%.4f".format(offset.z),
+            "%.4f".format(cachedCameraYaw ?: 0.0f),
+            "%.4f".format(cachedCameraPitch ?: 0.0f),
+            "%.4f".format(itemRenderFov),
+            "%.4f".format(worldRenderFov),
+            "%.4f".format(zFovScale),
+        )
+    }
+
+    private fun resolveItemToWorldFovScale(partialTicks: Float): Float {
+        val renderer = Minecraft.getMinecraft().entityRenderer as? EntityRendererInvoker ?: return 1.0f
+        val itemRenderFov = renderer.`tacz$invokeGetFOVModifier`(partialTicks, false).toDouble()
+        val worldRenderFov = renderer.`tacz$invokeGetFOVModifier`(partialTicks, true).toDouble()
+        if (itemRenderFov <= 0.0 || worldRenderFov <= 0.0) {
+            return 1.0f
+        }
+        val worldTan = tan(Math.toRadians(worldRenderFov / 2.0))
+        if (abs(worldTan) <= 1.0E-6) {
+            return 1.0f
+        }
+        return (tan(Math.toRadians(itemRenderFov / 2.0)) / worldTan).toFloat()
+    }
+
+    private fun logPositioningFallbacks(
+        gunId: ResourceLocation,
+        resolvedPaths: FirstPersonRenderMatrices.ResolvedPositioningPaths,
+    ) {
+        if (resolvedPaths.usedIdleFallback) {
+            logPositioningFallback(gunId, "idle_view missing, reusing aiming positioning path")
+        }
+        if (resolvedPaths.usedAimingFallback) {
+            logPositioningFallback(gunId, "aiming positioning path missing, reusing idle_view path")
+        }
+    }
+
+    private fun logPositioningFallback(gunId: ResourceLocation, reason: String) {
+        val key = "$gunId|$reason"
+        if (!positioningFallbackWarnings.add(key)) {
+            return
+        }
+        TACZLegacy.logger.warn("[FirstPersonRenderGunEvent] {} for {}", reason, gunId)
+        if (System.getProperty("tacz.focusedSmoke", "false").toBoolean()) {
+            TACZLegacy.logger.info("[FocusedSmoke] POSITIONING_FALLBACK gun={} reason={}", gunId, reason)
+        }
+    }
+
+    private fun applyFiniteMatrixLerp(
+        gunId: ResourceLocation,
+        fromMatrix: Matrix4f,
+        toMatrix: Matrix4f,
+        resultMatrix: Matrix4f,
+        alpha: Float,
+        reason: String,
+    ): Boolean {
+        val clampedAlpha = alpha.coerceIn(0.0f, 1.0f)
+        if (!FirstPersonRenderMatrices.isFinite(fromMatrix) || !FirstPersonRenderMatrices.isFinite(toMatrix) || !FirstPersonRenderMatrices.isFinite(resultMatrix)) {
+            logPositioningFallback(gunId, "$reason skipped because an input matrix was already non-finite")
+            return false
+        }
+        val candidate = Matrix4f(resultMatrix)
+        MathUtil.applyMatrixLerp(fromMatrix, toMatrix, candidate, clampedAlpha)
+        if (!FirstPersonRenderMatrices.isFinite(candidate)) {
+            logPositioningFallback(gunId, "$reason produced non-finite output, preserving previous matrix")
+            return false
+        }
+        resultMatrix.set(candidate)
+        return true
+    }
+
+    private fun failFirstPersonPositioning(gunId: ResourceLocation, reason: String): Nothing {
+        throw IllegalStateException("[FirstPersonRenderGunEvent] $reason for $gunId")
+    }
+
+    private fun logFocusedSmokeExitingFirstPersonUpdate(gunId: ResourceLocation, remainingMs: Long) {
+        if (!System.getProperty("tacz.focusedSmoke", "false").toBoolean()) {
+            return
+        }
+        val key = "$gunId:${remainingMs.coerceAtLeast(0L) / 50L}"
+        if (!exitingFirstPersonUpdateLogs.add(key)) {
+            return
+        }
+        TACZLegacy.logger.info(
+            "[FocusedSmoke] EXITING_FIRST_PERSON_UPDATE gun={} remainingMs={}",
+            gunId,
+            remainingMs.coerceAtLeast(0L),
+        )
+    }
+
+    private fun logFocusedSmokeFirstPersonBloom(gunId: ResourceLocation) {
+        if (!System.getProperty("tacz.focusedSmoke", "false").toBoolean()) {
+            return
+        }
+        val key = gunId.toString()
+        if (!firstPersonBloomLogs.add(key)) {
+            return
+        }
+        TACZLegacy.logger.info("[FocusedSmoke] FIRST_PERSON_BLOOM_RENDERED gun={}", gunId)
     }
 }

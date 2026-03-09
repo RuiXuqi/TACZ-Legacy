@@ -4,7 +4,10 @@ import com.tacz.legacy.api.entity.IGunOperator;
 import com.tacz.legacy.api.entity.KnockBackModifier;
 import com.tacz.legacy.api.entity.ReloadState;
 import com.tacz.legacy.api.entity.ShootResult;
+import com.tacz.legacy.api.item.IGun;
 import com.tacz.legacy.common.entity.shooter.*;
+import com.tacz.legacy.common.resource.GunDataAccessor;
+import com.tacz.legacy.common.resource.GunCombatData;
 import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.item.ItemStack;
 import org.spongepowered.asm.mixin.Mixin;
@@ -181,6 +184,68 @@ public abstract class LivingEntityMixin implements IGunOperator, KnockBackModifi
         tacz$aim.tickAimingProgress();
         tacz$melee.tickMelee();
         tacz$sprint.tickSprint();
+        tacz$tickHeat();
+    }
+
+    @Unique
+    private void tacz$tickHeat() {
+        EntityLivingBase self = (EntityLivingBase) (Object) this;
+        ItemStack mainHand = self.getHeldItemMainhand();
+        if (mainHand.isEmpty() || !(mainHand.getItem() instanceof IGun)) return;
+        IGun iGun = (IGun) mainHand.getItem();
+        GunCombatData gunData = GunDataAccessor.getGunData(iGun.getGunId(mainHand));
+        if (gunData == null || !gunData.getHasHeatData()) return;
+
+        long heatTs = tacz$dataHolder.heatTimestamp;
+        if (heatTs < 0) return;
+
+        // 脚本 hook: tick_heat
+        org.luaj.vm2.LuaTable script = com.tacz.legacy.common.entity.shooter.TACZGunScriptAPI.Companion.resolveScript(gunData);
+        org.luaj.vm2.LuaFunction tickHeatFunc = script != null
+                ? com.tacz.legacy.common.entity.shooter.TACZGunScriptAPI.Companion.checkFunction(script, "tick_heat")
+                : null;
+        if (tickHeatFunc != null) {
+            com.tacz.legacy.common.entity.shooter.TACZGunScriptAPI api =
+                    com.tacz.legacy.common.entity.shooter.TACZGunScriptAPI.Companion.create(self, tacz$dataHolder, mainHand, null, null);
+            tickHeatFunc.call(
+                    org.luaj.vm2.lib.jse.CoerceJavaToLua.coerce(api),
+                    org.luaj.vm2.LuaValue.valueOf(heatTs)
+            );
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        long elapsed = now - heatTs;
+        boolean locked = iGun.isOverheatLocked(mainHand);
+
+        if (locked) {
+            // 过热锁定：等待 overHeatTime 后开始冷却
+            if (elapsed < gunData.getHeatOverHeatTimeMs()) return;
+            float cooling = (float) elapsed / 10000.0f * gunData.getHeatCoolingMultiplier();
+            float current = iGun.getHeatAmount(mainHand);
+            float newHeat = current - cooling;
+            if (newHeat <= 0) {
+                iGun.setHeatAmount(mainHand, 0);
+                iGun.setOverheatLocked(mainHand, false);
+                tacz$dataHolder.heatTimestamp = now;
+            } else {
+                iGun.setHeatAmount(mainHand, newHeat);
+                tacz$dataHolder.heatTimestamp = now;
+            }
+        } else {
+            // 正常冷却：等待 coolingDelay 后开始冷却
+            float current = iGun.getHeatAmount(mainHand);
+            if (current <= 0) return;
+            if (elapsed < gunData.getHeatCoolingDelayMs()) return;
+            float cooling = (float) elapsed / 10000.0f * gunData.getHeatCoolingMultiplier();
+            float newHeat = current - cooling;
+            if (newHeat <= 0) {
+                iGun.setHeatAmount(mainHand, 0);
+            } else {
+                iGun.setHeatAmount(mainHand, newHeat);
+            }
+            tacz$dataHolder.heatTimestamp = now;
+        }
     }
 
     // ---- KnockBackModifier ----

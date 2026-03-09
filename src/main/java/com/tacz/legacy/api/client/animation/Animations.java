@@ -1,7 +1,10 @@
 package com.tacz.legacy.api.client.animation;
 
 import com.tacz.legacy.api.client.animation.interpolator.CustomInterpolator;
+import com.tacz.legacy.api.client.animation.interpolator.InterpolatorUtil;
 import com.tacz.legacy.client.resource.pojo.animation.bedrock.*;
+import com.tacz.legacy.client.resource.gltf.GltfAnimationData;
+import com.tacz.legacy.util.math.MathUtil;
 import it.unimi.dsi.fastutil.doubles.Double2ObjectMap;
 import it.unimi.dsi.fastutil.doubles.Double2ObjectRBTreeMap;
 import net.minecraft.util.ResourceLocation;
@@ -9,6 +12,7 @@ import org.joml.Vector3f;
 
 import javax.annotation.Nonnull;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -16,6 +20,94 @@ import java.util.Map;
 public class Animations {
     public static AnimationController createControllerFromBedrock(BedrockAnimationFile animationFile, AnimationListenerSupplier supplier) {
         return new AnimationController(createAnimationFromBedrock(animationFile), supplier);
+    }
+
+    public static AnimationController createControllerFromGltf(GltfAnimationData animationData, AnimationListenerSupplier supplier) {
+        List<ObjectAnimation> result = new ArrayList<>();
+        for (GltfAnimationData.Animation animationModel : animationData.getAnimations()) {
+            ObjectAnimation animation = new ObjectAnimation(animationModel.getName());
+            for (GltfAnimationData.Channel channelModel : animationModel.getChannels()) {
+                ObjectAnimationChannel channel = new ObjectAnimationChannel(ObjectAnimationChannel.ChannelType.valueOf(channelModel.getPath().name()));
+                switch (channelModel.getInterpolation()) {
+                    case STEP:
+                        channel.interpolator = InterpolatorUtil.fromInterpolation(InterpolatorUtil.InterpolatorType.STEP);
+                        break;
+                    case SPLINE:
+                        channel.interpolator = InterpolatorUtil.fromInterpolation(InterpolatorUtil.InterpolatorType.SPLINE);
+                        break;
+                    case LINEAR:
+                    default:
+                        channel.interpolator = InterpolatorUtil.fromInterpolation(InterpolatorUtil.InterpolatorType.LINEAR);
+                        break;
+                }
+                channel.node = channelModel.getNodeName();
+
+                AnimationListener animationListener = supplier.supplyListeners(channel.node, channel.type);
+                if (animationListener == null) {
+                    continue;
+                }
+                float[] inverseValue = animationListener.initialValue();
+                float[] keyframeTimeS = Arrays.copyOf(channelModel.getKeyframeTimeS(), channelModel.getKeyframeTimeS().length);
+                float[][] values = new float[channelModel.getValues().length][];
+                for (int i = 0; i < channelModel.getValues().length; i++) {
+                    values[i] = Arrays.copyOf(channelModel.getValues()[i], channelModel.getValues()[i].length);
+                }
+
+                switch (channel.type) {
+                    case ROTATION:
+                        if (inverseValue.length >= 3) {
+                            float[] inverseQuaternion = MathUtil.inverseQuaternion(
+                                    MathUtil.toQuaternion(inverseValue[0], inverseValue[1], inverseValue[2])
+                            );
+                            for (float[] value : values) {
+                                if (value.length < 4) {
+                                    continue;
+                                }
+                                for (int offset = 0; offset + 3 < value.length; offset += 4) {
+                                    float[] valueQuaternion = Arrays.copyOfRange(value, offset, offset + 4);
+                                    float[] output = MathUtil.toEulerAngles(MathUtil.mulQuaternion(inverseQuaternion, valueQuaternion));
+                                    value[offset] = output[0];
+                                    value[offset + 1] = output[1];
+                                    value[offset + 2] = output[2];
+                                }
+                            }
+                        }
+                        break;
+                    case SCALE:
+                        if (inverseValue.length >= 3) {
+                            for (float[] value : values) {
+                                for (int offset = 0; offset + 2 < value.length; offset += 3) {
+                                    value[offset] /= inverseValue[0];
+                                    value[offset + 1] /= inverseValue[1];
+                                    value[offset + 2] /= inverseValue[2];
+                                }
+                            }
+                        }
+                        break;
+                    case TRANSLATION:
+                        float[] defaultValue = channelModel.getDefaultValue();
+                        if (defaultValue.length >= 3) {
+                            for (float[] value : values) {
+                                for (int offset = 0; offset + 2 < value.length; offset += 3) {
+                                    value[offset] -= defaultValue[0];
+                                    value[offset + 1] -= defaultValue[1];
+                                    value[offset + 2] -= defaultValue[2];
+                                }
+                            }
+                        }
+                        break;
+                    default:
+                        break;
+                }
+
+                channel.content.keyframeTimeS = keyframeTimeS;
+                channel.content.values = values;
+                channel.interpolator.compile(channel.content);
+                animation.addChannel(channel);
+            }
+            result.add(animation);
+        }
+        return new AnimationController(result, supplier);
     }
 
     public static @Nonnull List<ObjectAnimation> createAnimationFromBedrock(BedrockAnimationFile animationFile) {

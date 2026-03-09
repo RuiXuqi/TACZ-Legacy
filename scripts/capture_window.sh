@@ -30,6 +30,19 @@ if [[ -z "$target_window" || "$target_window" == "null" ]]; then
   exit 1
 fi
 
+workspace_name="$(printf '%s' "$target_window" | jq -r '.workspace.name // empty')"
+address="$(printf '%s' "$target_window" | jq -r '.address // empty')"
+
+if [[ -n "$workspace_name" && "$workspace_name" != "null" ]]; then
+  hyprctl dispatch workspace "$workspace_name" >/dev/null 2>&1 || true
+fi
+
+if [[ -n "$address" && "$address" != "null" ]]; then
+  hyprctl dispatch focuswindow "address:$address" >/dev/null 2>&1 || true
+fi
+
+sleep 0.2
+
 x="$(printf '%s' "$target_window" | jq -r '.at[0]')"
 y="$(printf '%s' "$target_window" | jq -r '.at[1]')"
 w="$(printf '%s' "$target_window" | jq -r '.size[0]')"

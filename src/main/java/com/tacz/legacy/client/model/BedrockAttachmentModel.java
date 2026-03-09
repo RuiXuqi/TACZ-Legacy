@@ -93,6 +93,12 @@ public class BedrockAttachmentModel extends BedrockAnimatedModel {
         super.render();
     }
 
+    public void renderBloom(@Nullable ItemStack attachmentItem, @Nullable ItemStack currentGunItem) {
+        this.attachmentItem = attachmentItem;
+        this.currentGunItem = currentGunItem;
+        super.renderBloom();
+    }
+
     @Nullable
     public ItemStack getCurrentGunItem() {
         return currentGunItem;

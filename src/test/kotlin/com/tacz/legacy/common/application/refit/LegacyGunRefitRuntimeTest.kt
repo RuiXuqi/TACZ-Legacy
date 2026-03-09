@@ -66,6 +66,21 @@ class LegacyGunRefitRuntimeTest {
     }
 
     @Test
+    fun `compatible creative attachments include any allowed attachment of selected type`() {
+        withCustomSnapshot {
+            val gunStack = ItemStack(LegacyItems.MODERN_KINETIC_GUN)
+            LegacyItems.MODERN_KINETIC_GUN.setGunId(gunStack, ResourceLocation("demo", "refit_rifle"))
+
+            val compatible = LegacyGunRefitRuntime.compatibleCreativeAttachments(
+                gunStack = gunStack,
+                selectedType = AttachmentType.SCOPE,
+            )
+
+            assertEquals(listOf(ResourceLocation("demo", "scope_ok")), compatible.map(LegacyItems.ATTACHMENT::getAttachmentId))
+        }
+    }
+
+    @Test
     fun `laser payload writes attachment and gun colors back into gun nbt`() {
         withCustomSnapshot {
             val gunStack = ItemStack(LegacyItems.MODERN_KINETIC_GUN)

@@ -10,22 +10,32 @@ import com.tacz.legacy.api.entity.ShootResult
 import com.tacz.legacy.api.item.IGun
 import com.tacz.legacy.api.item.attachment.AttachmentType
 import com.tacz.legacy.client.animation.statemachine.GunAnimationConstant
+import com.tacz.legacy.client.gui.GunRefitScreen
 import com.tacz.legacy.client.gameplay.LegacyClientGunAnimationDriver
 import com.tacz.legacy.client.gameplay.LegacyClientShootCoordinator
 import com.tacz.legacy.client.model.BedrockGunModel
 import com.tacz.legacy.client.resource.TACZClientAssetManager
-import com.tacz.legacy.common.network.message.event.ServerMessageSound
+import com.tacz.legacy.common.application.refit.LegacyGunRefitRuntime
 import com.tacz.legacy.common.foundation.FocusedSmokePlanner
 import com.tacz.legacy.common.foundation.FocusedSmokeRuntime
+import com.tacz.legacy.common.network.TACZNetworkHandler
+import com.tacz.legacy.common.network.message.client.ClientMessagePlayerReload
+import com.tacz.legacy.common.network.message.event.ServerMessageSound
+import com.tacz.legacy.common.resource.GunDataAccessor
 import com.tacz.legacy.common.resource.TACZGunPackPresentation
 import com.tacz.legacy.common.resource.TACZGunPackRuntimeRegistry
 import net.minecraft.client.Minecraft
 import net.minecraft.client.entity.EntityPlayerSP
 import net.minecraft.client.gui.GuiChat
 import net.minecraft.client.gui.GuiMainMenu
+import net.minecraft.init.Blocks
 import net.minecraft.network.INetHandler
 import net.minecraft.network.play.client.CPacketHeldItemChange
+import net.minecraft.util.EnumFacing
 import net.minecraft.util.EnumHand
+import net.minecraft.util.math.BlockPos
+import net.minecraft.util.math.RayTraceResult
+import net.minecraft.util.math.Vec3d
 import net.minecraft.world.GameType
 import net.minecraft.world.WorldSettings
 import net.minecraft.world.WorldType
@@ -37,6 +47,9 @@ import net.minecraftforge.fml.common.network.simpleimpl.MessageContext
 import net.minecraftforge.fml.common.gameevent.TickEvent
 import net.minecraftforge.fml.relauncher.Side
 import org.lwjgl.opengl.Display
+import java.lang.reflect.Field
+import java.lang.reflect.Method
+import kotlin.math.abs
 import kotlin.math.max
 
 internal object FocusedSmokeClientHooks {
@@ -44,6 +57,13 @@ internal object FocusedSmokeClientHooks {
     private const val GEAR_TIMEOUT_MS: Long = 20_000L
     private const val BASELINE_DELAY_MS: Long = 2_500L
     private const val ANIMATION_WAIT_MS: Long = 8_000L
+    private const val REFIT_PREVIEW_WAIT_MS: Long = 1_600L
+    private const val REFIT_TOGGLE_DELAY_MS: Long = 120L
+    private const val REFIT_FOCUS_DELAY_MS: Long = 350L
+    private const val REFIT_INSTALL_DELAY_MS: Long = 700L
+    private const val REFIT_INSTALL_VERIFY_DELAY_MS: Long = 1_050L
+    private const val RELOAD_TIMEOUT_PADDING_MS: Long = 3_000L
+    private const val RELOAD_TOLERANCE_MS: Long = 250L
     private const val REGULAR_PROJECTILE_WAIT_MS: Long = 8_000L
     private const val EXPLOSION_WAIT_MS: Long = 15_000L
     private const val SHOOT_RETRY_INTERVAL_MS: Long = 750L
@@ -55,8 +75,13 @@ internal object FocusedSmokeClientHooks {
         WAIT_GEAR,
         WAIT_BASELINE,
         WAIT_FIRST_RENDER,
+        ATTEMPT_LEFT_CLICK_SUPPRESSION,
+        ATTEMPT_REFIT,
+        WAIT_REFIT,
         ATTEMPT_INSPECT,
         WAIT_INSPECT,
+        ATTEMPT_RELOAD,
+        WAIT_RELOAD,
         ATTEMPT_REGULAR_SHOT,
         WAIT_REGULAR_PROJECTILE,
         SWITCH_EXPLOSIVE,
@@ -76,6 +101,38 @@ internal object FocusedSmokeClientHooks {
     private var keepAliveGuiActive: Boolean = false
     private var syntheticServerSoundDispatched: Boolean = false
     private var syntheticServerSoundSkipped: Boolean = false
+    private var refitFocusTriggered: Boolean = false
+    private var refitPropertiesToggleTriggered: Boolean = false
+    private var refitInstallTriggered: Boolean = false
+    private var refitInstallVerified: Boolean = false
+    private var refitExpectedAttachmentId: String? = null
+    private var reloadStartedAtMs: Long = 0L
+    private var expectedReloadDurationMs: Long = 0L
+    private var reloadGunId: String? = null
+
+    private val clickMouseMethod: Method? by lazy {
+        runCatching {
+            Minecraft::class.java.getDeclaredMethod("clickMouse").apply {
+                isAccessible = true
+            }
+        }.getOrNull()
+    }
+
+    private val sendClickBlockToControllerMethod: Method? by lazy {
+        runCatching {
+            Minecraft::class.java.getDeclaredMethod("sendClickBlockToController", Boolean::class.javaPrimitiveType).apply {
+                isAccessible = true
+            }
+        }.getOrNull()
+    }
+
+    private val leftClickCounterField: Field? by lazy {
+        runCatching {
+            Minecraft::class.java.getDeclaredField("leftClickCounter").apply {
+                isAccessible = true
+            }
+        }.getOrNull()
+    }
 
     @SubscribeEvent
     fun onClientTick(event: TickEvent.ClientTickEvent) {
@@ -113,8 +170,13 @@ internal object FocusedSmokeClientHooks {
             Step.WAIT_GEAR -> handleWaitGear(player)
             Step.WAIT_BASELINE -> handleWaitBaseline(player)
             Step.WAIT_FIRST_RENDER -> handleWaitFirstRender(player)
+            Step.ATTEMPT_LEFT_CLICK_SUPPRESSION -> handleAttemptLeftClickSuppression(player)
+            Step.ATTEMPT_REFIT -> handleAttemptRefit(player)
+            Step.WAIT_REFIT -> handleWaitRefit(player)
             Step.ATTEMPT_INSPECT -> handleAttemptInspect(player)
             Step.WAIT_INSPECT -> handleWaitInspect()
+            Step.ATTEMPT_RELOAD -> handleAttemptReload(player)
+            Step.WAIT_RELOAD -> handleWaitReload(player)
             Step.ATTEMPT_REGULAR_SHOT -> handleAttemptRegularShot(player)
             Step.WAIT_REGULAR_PROJECTILE -> handleWaitRegularProjectile()
             Step.SWITCH_EXPLOSIVE -> handleSwitchExplosive(player)
@@ -257,13 +319,196 @@ internal object FocusedSmokeClientHooks {
 
     private fun handleWaitFirstRender(player: EntityPlayerSP) {
         if (FocusedSmokeRuntime.animationObserved) {
-            transition(Step.ATTEMPT_INSPECT, "ANIMATION_GATE_OPEN")
+            transition(nextPostAnimationStep(), "ANIMATION_GATE_OPEN")
             return
         }
         if (!animationTimeoutLogged && elapsedMs() > ANIMATION_WAIT_MS) {
             animationTimeoutLogged = true
             FocusedSmokeRuntime.markRegularShootResult("ANIMATION_PENDING_TIMEOUT", currentGunId(player) ?: return)
-            transition(Step.ATTEMPT_INSPECT, "ANIMATION_WAIT_TIMEOUT continue_to_inspect_check=true")
+            transition(nextPostAnimationStep(), "ANIMATION_WAIT_TIMEOUT continue_to_inspect_check=true")
+        }
+    }
+
+    private fun handleAttemptLeftClickSuppression(player: EntityPlayerSP) {
+        val mc = Minecraft.getMinecraft()
+        val probePos = findLeftClickProbeBlock(player) ?: run {
+            FocusedSmokeRuntime.markFailure("left_click_probe_block_missing")
+            step = Step.FAILED
+            return
+        }
+        val originalState = player.world.getBlockState(probePos)
+        val insertedTemporaryBlock = player.world.isAirBlock(probePos)
+        if (insertedTemporaryBlock && !player.world.setBlockState(probePos, Blocks.STONE.defaultState)) {
+            FocusedSmokeRuntime.markFailure("left_click_probe_block_place_failed")
+            step = Step.FAILED
+            return
+        }
+        val probeState = player.world.getBlockState(probePos)
+
+        val clickMethod = clickMouseMethod
+        val blockMethod = sendClickBlockToControllerMethod
+        val counterField = leftClickCounterField
+        if (clickMethod == null || blockMethod == null || counterField == null) {
+            if (insertedTemporaryBlock) {
+                player.world.setBlockState(probePos, originalState)
+            }
+            FocusedSmokeRuntime.markFailure("left_click_probe_invoke_failed")
+            step = Step.FAILED
+            return
+        }
+
+        val originalHit = mc.objectMouseOver
+        val originalSwing = player.isSwingInProgress
+        val originalLeftClickCounter = counterField.getInt(mc)
+
+        mc.objectMouseOver = RayTraceResult(Vec3d(probePos).add(0.5, 0.5, 0.5), EnumFacing.UP, probePos)
+        counterField.setInt(mc, 0)
+
+        val invokeSucceeded = runCatching {
+            clickMethod.invoke(mc)
+            blockMethod.invoke(mc, true)
+        }.isSuccess
+
+        mc.objectMouseOver = originalHit
+        counterField.setInt(mc, originalLeftClickCounter)
+        mc.playerController?.resetBlockRemoving()
+
+        val stateAfter = player.world.getBlockState(probePos)
+        if (insertedTemporaryBlock) {
+            player.world.setBlockState(probePos, originalState)
+        }
+
+        if (!invokeSucceeded) {
+            FocusedSmokeRuntime.markFailure("left_click_probe_invoke_failed")
+            step = Step.FAILED
+            return
+        }
+
+        val blockChanged = stateAfter != probeState
+        val hittingBlock = mc.playerController?.getIsHittingBlock() == true
+        val swingStarted = player.isSwingInProgress && !originalSwing
+
+        if (blockChanged || hittingBlock || swingStarted) {
+            FocusedSmokeRuntime.markFailure(
+                buildString {
+                    append("left_click_not_suppressed")
+                    append("_blockChanged=").append(blockChanged)
+                    append("_hittingBlock=").append(hittingBlock)
+                    append("_swing=").append(swingStarted)
+                },
+            )
+            step = Step.FAILED
+            return
+        }
+
+        FocusedSmokeRuntime.markLeftClickSuppressed(
+            "target=$probePos block=${probeState.block.registryName} swing=$swingStarted hittingBlock=$hittingBlock temporary=$insertedTemporaryBlock",
+        )
+        transition(nextPostSuppressionStep(), "LEFT_CLICK_SUPPRESSED target=$probePos")
+    }
+
+    private fun handleAttemptRefit(player: EntityPlayerSP) {
+        val plan = FocusedSmokeRuntime.currentPlan() ?: run {
+            FocusedSmokeRuntime.markFailure("no_regular_gun_plan")
+            step = Step.FAILED
+            return
+        }
+        ensureHoldingGun(player, plan.regularGunId, preferredSlot = 0)
+        val stack = player.heldItemMainhand
+        if (!holdsGun(player, plan.regularGunId)) {
+            if (elapsedMs() > GEAR_TIMEOUT_MS) {
+                FocusedSmokeRuntime.markFailure("regular_gun_lost_before_refit")
+                step = Step.FAILED
+            }
+            return
+        }
+        if (!LegacyGunRefitRuntime.canOpenRefit(stack)) {
+            if (elapsedMs() > GEAR_TIMEOUT_MS) {
+                FocusedSmokeRuntime.markFailure("refit_screen_unavailable")
+                step = Step.FAILED
+            }
+            return
+        }
+        val mc = Minecraft.getMinecraft()
+        if (mc.currentScreen !is GunRefitScreen) {
+            mc.displayGuiScreen(GunRefitScreen())
+        }
+        transition(Step.WAIT_REFIT, "REFIT_SCREEN_OPEN gun=${plan.regularGunId}")
+    }
+
+    private fun handleWaitRefit(player: EntityPlayerSP) {
+        val mc = Minecraft.getMinecraft()
+        val refitScreen = mc.currentScreen as? GunRefitScreen
+        if (refitScreen == null) {
+            if (elapsedMs() > REFIT_PREVIEW_WAIT_MS) {
+                FocusedSmokeRuntime.markFailure("refit_screen_unavailable")
+                step = Step.FAILED
+            }
+            return
+        }
+        if (!refitPropertiesToggleTriggered && elapsedMs() >= REFIT_TOGGLE_DELAY_MS) {
+            refitPropertiesToggleTriggered = true
+            val hidden = refitScreen.triggerFocusedSmokeToggleProperties()
+            TACZLegacy.logger.info("[FocusedSmoke] REFIT_PROPERTIES_TOGGLE hidden={}", hidden)
+            val restored = refitScreen.triggerFocusedSmokeToggleProperties()
+            TACZLegacy.logger.info("[FocusedSmoke] REFIT_PROPERTIES_TOGGLE hidden={}", restored)
+        }
+        if (!refitFocusTriggered && elapsedMs() >= REFIT_FOCUS_DELAY_MS) {
+            refitFocusTriggered = true
+            val selectedType = refitScreen.triggerFocusedSmokeSelectType()
+            if (selectedType == null) {
+                TACZLegacy.logger.info(
+                    "[FocusedSmoke] REFIT_SLOT_FOCUS_SKIPPED gun={} reason=no_available_slot",
+                    currentGunId(player),
+                )
+            } else {
+                TACZLegacy.logger.info(
+                    "[FocusedSmoke] REFIT_SLOT_FOCUS gun={} type={}",
+                    currentGunId(player),
+                    selectedType.serializedName,
+                )
+            }
+        }
+        if (!refitInstallTriggered && elapsedMs() >= REFIT_INSTALL_DELAY_MS) {
+            refitInstallTriggered = true
+            refitExpectedAttachmentId = refitScreen.triggerFocusedSmokeInstallFirstCandidate()?.toString()
+            if (refitExpectedAttachmentId == null) {
+                TACZLegacy.logger.info(
+                    "[FocusedSmoke] REFIT_ATTACHMENT_CLICK_SKIPPED gun={} reason=no_candidate",
+                    currentGunId(player),
+                )
+            } else {
+                TACZLegacy.logger.info(
+                    "[FocusedSmoke] REFIT_ATTACHMENT_CLICK gun={} attachment={}",
+                    currentGunId(player),
+                    refitExpectedAttachmentId,
+                )
+            }
+        }
+        if (!refitInstallVerified && refitExpectedAttachmentId != null && elapsedMs() >= REFIT_INSTALL_VERIFY_DELAY_MS) {
+            val installedId = refitScreen.focusedSmokeSelectedAttachmentId()?.toString()
+            if (installedId == refitExpectedAttachmentId) {
+                refitInstallVerified = true
+                TACZLegacy.logger.info(
+                    "[FocusedSmoke] REFIT_ATTACHMENT_APPLIED gun={} attachment={}",
+                    currentGunId(player),
+                    installedId,
+                )
+            }
+        }
+        if (elapsedMs() >= REFIT_PREVIEW_WAIT_MS) {
+            if (refitExpectedAttachmentId != null && !refitInstallVerified) {
+                FocusedSmokeRuntime.markFailure("refit_attachment_not_applied")
+                step = Step.FAILED
+                return
+            }
+            mc.displayGuiScreen(null)
+            if (FocusedSmokeRuntime.passAfterRefitEnabled && refitExpectedAttachmentId != null && refitInstallVerified) {
+                FocusedSmokeRuntime.forcePass("refit_preview")
+                transition(Step.COMPLETE, "REFIT_PREVIEW_COMPLETE gun=${currentGunId(player)}")
+                return
+            }
+            transition(Step.ATTEMPT_INSPECT, "REFIT_PREVIEW_COMPLETE gun=${currentGunId(player)}")
         }
     }
 
@@ -288,7 +533,98 @@ internal object FocusedSmokeClientHooks {
 
     private fun handleWaitInspect() {
         if (elapsedMs() > 4000L) {
-            transition(Step.ATTEMPT_REGULAR_SHOT, "INSPECT_COMPLETED wait=4000ms")
+            val nextStep = if (FocusedSmokeRuntime.skipReloadEnabled) {
+                Step.ATTEMPT_REGULAR_SHOT
+            } else {
+                Step.ATTEMPT_RELOAD
+            }
+            transition(nextStep, "INSPECT_COMPLETED wait=4000ms skipReload=${FocusedSmokeRuntime.skipReloadEnabled}")
+        }
+    }
+
+    private fun handleAttemptReload(player: EntityPlayerSP) {
+        val plan = FocusedSmokeRuntime.currentPlan() ?: run {
+            FocusedSmokeRuntime.markFailure("no_regular_gun_plan")
+            step = Step.FAILED
+            return
+        }
+        ensureHoldingGun(player, plan.regularGunId, preferredSlot = 0)
+        if (!holdsGun(player, plan.regularGunId)) {
+            if (elapsedMs() > GEAR_TIMEOUT_MS) {
+                FocusedSmokeRuntime.markFailure("reload_gun_missing")
+                step = Step.FAILED
+            }
+            return
+        }
+        val stack = player.heldItemMainhand
+        val iGun = stack.item as? IGun ?: run {
+            FocusedSmokeRuntime.markFailure("reload_item_not_gun")
+            step = Step.FAILED
+            return
+        }
+        val operator = IGunOperator.fromLivingEntity(player)
+        if (operator.getSynDrawCoolDown() != 0L || operator.getSynReloadState().stateType.isReloading() || operator.getSynIsBolting()) {
+            if (elapsedMs() > GEAR_TIMEOUT_MS) {
+                FocusedSmokeRuntime.markFailure("reload_not_ready")
+                step = Step.FAILED
+            }
+            return
+        }
+        val gunData = GunDataAccessor.getGunData(iGun.getGunId(stack)) ?: run {
+            FocusedSmokeRuntime.markFailure("reload_gun_data_missing")
+            step = Step.FAILED
+            return
+        }
+        val currentAmmo = iGun.getCurrentAmmoCount(stack)
+        val emptyReload = currentAmmo <= 0 && !iGun.hasBulletInBarrel(stack)
+        val expectedMs = if (emptyReload) {
+            ((gunData.emptyReloadFeedingTimeS + gunData.emptyReloadFinishingTimeS) * 1000.0).toLong()
+        } else {
+            ((gunData.reloadFeedingTimeS + gunData.reloadFinishingTimeS) * 1000.0).toLong()
+        }
+        val before = operator.getSynReloadState().stateType
+        operator.reload()
+        if (before == operator.getSynReloadState().stateType) {
+            if (elapsedMs() > GEAR_TIMEOUT_MS) {
+                FocusedSmokeRuntime.markFailure("reload_not_started")
+                step = Step.FAILED
+            }
+            return
+        }
+        TACZNetworkHandler.sendToServer(ClientMessagePlayerReload())
+        LegacyClientGunAnimationDriver.triggerIfInitialized(stack, GunAnimationConstant.INPUT_RELOAD)
+        reloadStartedAtMs = System.currentTimeMillis()
+        expectedReloadDurationMs = expectedMs
+        reloadGunId = iGun.getGunId(stack).toString()
+        transition(
+            Step.WAIT_RELOAD,
+            "RELOAD_STARTED gun=${reloadGunId} state=${operator.getSynReloadState().stateType} expectedMs=$expectedReloadDurationMs empty=$emptyReload currentAmmo=$currentAmmo"
+        )
+    }
+
+    private fun handleWaitReload(player: EntityPlayerSP) {
+        val operator = IGunOperator.fromLivingEntity(player)
+        if (!operator.getSynReloadState().stateType.isReloading()) {
+            val actualMs = max(0L, System.currentTimeMillis() - reloadStartedAtMs)
+            val deltaMs = actualMs - expectedReloadDurationMs
+            TACZLegacy.logger.info(
+                "[FocusedSmoke] RELOAD_COMPLETED gun={} expectedMs={} actualMs={} deltaMs={}",
+                reloadGunId ?: currentGunId(player),
+                expectedReloadDurationMs,
+                actualMs,
+                deltaMs,
+            )
+            if (abs(deltaMs) > RELOAD_TOLERANCE_MS) {
+                FocusedSmokeRuntime.markFailure("reload_timing_delta_${deltaMs}")
+                step = Step.FAILED
+                return
+            }
+            transition(Step.ATTEMPT_REGULAR_SHOT, "RELOAD_TIMING_OK deltaMs=$deltaMs")
+            return
+        }
+        if (elapsedMs() > expectedReloadDurationMs + RELOAD_TIMEOUT_PADDING_MS) {
+            FocusedSmokeRuntime.markFailure("reload_timeout")
+            step = Step.FAILED
         }
     }
 
@@ -307,18 +643,46 @@ internal object FocusedSmokeClientHooks {
             }
             return
         }
+        applyRegularShotViewOverride(player)
         if (System.currentTimeMillis() - lastShootAttemptAtMs < SHOOT_RETRY_INTERVAL_MS) {
             return
         }
         player.isSprinting = false
         lastShootAttemptAtMs = System.currentTimeMillis()
-        val result = attemptSmokeShoot(player, operator)
+        val result = attemptSmokeShoot(
+            player,
+            operator,
+            pitch = FocusedSmokeRuntime.regularShotPitchOverride ?: player.rotationPitch,
+            yaw = FocusedSmokeRuntime.regularShotYawOverride ?: player.rotationYaw,
+        )
         FocusedSmokeRuntime.markRegularShootResult(result.name, plan.regularGunId)
         if (result == ShootResult.SUCCESS) {
             transition(Step.WAIT_REGULAR_PROJECTILE, "REGULAR_SHOT_SENT gun=${plan.regularGunId}")
         } else if (elapsedMs() > REGULAR_PROJECTILE_WAIT_MS) {
             FocusedSmokeRuntime.markFailure("regular_shot_failed_${result.name.lowercase()}")
             step = Step.FAILED
+        }
+    }
+
+    private fun applyRegularShotViewOverride(player: EntityPlayerSP) {
+        val pitchOverride = FocusedSmokeRuntime.regularShotPitchOverride
+        val yawOverride = FocusedSmokeRuntime.regularShotYawOverride
+        if (pitchOverride == null && yawOverride == null) {
+            return
+        }
+        pitchOverride?.let { pitch ->
+            player.prevRotationPitch = pitch
+            player.rotationPitch = pitch
+            player.prevRenderArmPitch = pitch
+            player.renderArmPitch = pitch
+        }
+        yawOverride?.let { yaw ->
+            player.prevRotationYaw = yaw
+            player.rotationYaw = yaw
+            player.prevRotationYawHead = yaw
+            player.rotationYawHead = yaw
+            player.prevRenderArmYaw = yaw
+            player.renderArmYaw = yaw
         }
     }
 
@@ -516,6 +880,14 @@ internal object FocusedSmokeClientHooks {
         keepAliveGuiActive = false
         syntheticServerSoundDispatched = false
         syntheticServerSoundSkipped = false
+        refitFocusTriggered = false
+        refitPropertiesToggleTriggered = false
+        refitInstallTriggered = false
+        refitInstallVerified = false
+        refitExpectedAttachmentId = null
+        reloadStartedAtMs = 0L
+        expectedReloadDurationMs = 0L
+        reloadGunId = null
     }
 
     private fun maintainClientLiveness(mc: Minecraft) {
@@ -545,8 +917,13 @@ internal object FocusedSmokeClientHooks {
             Step.WAIT_GEAR,
             Step.WAIT_BASELINE,
             Step.WAIT_FIRST_RENDER,
+            Step.ATTEMPT_LEFT_CLICK_SUPPRESSION,
+            Step.ATTEMPT_REFIT,
+            Step.WAIT_REFIT,
             Step.ATTEMPT_INSPECT,
             Step.WAIT_INSPECT,
+            Step.ATTEMPT_RELOAD,
+            Step.WAIT_RELOAD,
             Step.ATTEMPT_REGULAR_SHOT,
             Step.WAIT_REGULAR_PROJECTILE,
             Step.SWITCH_EXPLOSIVE,
@@ -557,7 +934,7 @@ internal object FocusedSmokeClientHooks {
         val isFocusAtRisk = !Display.isActive() || !mc.inGameHasFocus
         val shouldOpenChat = wantsKeepAliveGui && isFocusAtRisk
         if (shouldOpenChat) {
-            if (mc.currentScreen !is GuiChat) {
+            if (mc.currentScreen == null) {
                 mc.displayGuiScreen(GuiChat(""))
                 keepAliveGuiActive = true
                 com.tacz.legacy.TACZLegacy.logger.info(
@@ -568,9 +945,36 @@ internal object FocusedSmokeClientHooks {
             }
             return
         }
-        if (keepAliveGuiActive && (mc.currentScreen is GuiChat) && !wantsKeepAliveGui) {
+        if (keepAliveGuiActive && (mc.currentScreen is GuiChat) && (!wantsKeepAliveGui || !isFocusAtRisk)) {
             clearKeepAliveGuiIfNeeded(mc)
         }
+    }
+
+    private fun nextPostAnimationStep(): Step = Step.ATTEMPT_LEFT_CLICK_SUPPRESSION
+
+    private fun nextPostSuppressionStep(): Step = if (FocusedSmokeRuntime.refitPreviewEnabled) Step.ATTEMPT_REFIT else Step.ATTEMPT_INSPECT
+
+    private fun findLeftClickProbeBlock(player: EntityPlayerSP): BlockPos? {
+        val directHit = Minecraft.getMinecraft().objectMouseOver
+        if (directHit?.typeOfHit == RayTraceResult.Type.BLOCK && directHit.blockPos != null && !player.world.isAirBlock(directHit.blockPos)) {
+            return directHit.blockPos
+        }
+
+        val base = BlockPos(player.posX, player.posY, player.posZ)
+        val candidates = mutableListOf<BlockPos>()
+        for (radius in 0..4) {
+            for (dy in -3..1) {
+                for (dx in -radius..radius) {
+                    for (dz in -radius..radius) {
+                        if (radius > 0 && kotlin.math.abs(dx) != radius && kotlin.math.abs(dz) != radius) {
+                            continue
+                        }
+                        candidates += base.add(dx, dy, dz)
+                    }
+                }
+            }
+        }
+        return candidates.firstOrNull { !player.world.isAirBlock(it) } ?: base.north(2)
     }
 
     private fun clearKeepAliveGuiIfNeeded(mc: Minecraft) {

@@ -2,9 +2,14 @@ package com.tacz.legacy.client.event
 
 import com.tacz.legacy.api.item.IGun
 import com.tacz.legacy.api.item.gun.FireMode
+import com.tacz.legacy.api.entity.IGunOperator
+import com.tacz.legacy.client.gameplay.LegacyClientGunAnimationDriver
 import com.tacz.legacy.client.input.LegacyInputExtraCheck
 import com.tacz.legacy.client.input.LegacyKeyBindings
+import com.tacz.legacy.client.gui.GunRefitScreen
+import com.tacz.legacy.client.renderer.crosshair.CrosshairType
 import com.tacz.legacy.client.resource.TACZClientAssetManager
+import com.tacz.legacy.client.resource.pojo.display.gun.AmmoCountStyle
 import com.tacz.legacy.common.config.LegacyConfigManager
 import com.tacz.legacy.common.config.InteractKeyConfigRead
 import com.tacz.legacy.common.item.LegacyRuntimeTooltipSupport
@@ -13,6 +18,7 @@ import com.tacz.legacy.common.resource.TACZGunPackPresentation
 import com.tacz.legacy.common.resource.TACZGunPackRuntimeRegistry
 import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.Gui
+import net.minecraft.client.gui.ScaledResolution
 import net.minecraft.client.renderer.GlStateManager
 import net.minecraft.entity.EntityList
 import net.minecraft.util.ResourceLocation
@@ -32,9 +38,44 @@ internal object LegacyClientOverlayEventHandler {
     private val HEAT_BASE: ResourceLocation = ResourceLocation("tacz", "textures/hud/heat_base.png")
 
     private val currentAmmoFormat: DecimalFormat = DecimalFormat("000")
+    private val currentAmmoFormatPercent: DecimalFormat = DecimalFormat("000%")
     private val reserveAmmoFormat: DecimalFormat = DecimalFormat("0000")
     private val heatPercentFormat: DecimalFormat = DecimalFormat("0.0%")
     private var heatScale: Float = 0.75f
+    private var lastFocusedSmokeCrosshairKey: String? = null
+
+    @SubscribeEvent
+    fun onRenderCrosshair(event: RenderGameOverlayEvent.Pre) {
+        if (event.type != RenderGameOverlayEvent.ElementType.CROSSHAIRS) {
+            return
+        }
+        val mc = Minecraft.getMinecraft()
+        val player = mc.player ?: return
+        if (player.isSpectator || !IGun.mainHandHoldGun(player)) {
+            return
+        }
+        event.isCanceled = true
+
+        val gunStack = player.heldItemMainhand
+        gunStack.item as? IGun ?: return
+        val operator = IGunOperator.fromLivingEntity(player)
+        if (operator.getSynReloadState().stateType != com.tacz.legacy.api.entity.ReloadState.StateType.NOT_RELOADING) {
+            return
+        }
+        if (mc.currentScreen is GunRefitScreen || mc.gameSettings.thirdPersonView != 0) {
+            return
+        }
+
+        val displayInstance = LegacyClientGunAnimationDriver.resolveDisplayInstance(gunStack)
+        val shouldForceShow = displayInstance?.isShowCrosshair == true
+        if (operator.getSynAimingProgress() > 0.9f && !shouldForceShow) {
+            return
+        }
+        if (displayInstance?.animationStateMachine?.context?.shouldHideCrossHair() == true) {
+            return
+        }
+        renderCrosshair(mc)
+    }
 
     @SubscribeEvent
     fun onRenderOverlay(event: RenderGameOverlayEvent.Post): Unit {
@@ -84,7 +125,18 @@ internal object LegacyClientOverlayEventHandler {
             else -> 0xFFFFFF
         }
         val reserveColor = if (!useInventoryAmmo && useDummyAmmo) 0x55FFFF else 0xAAAAAA
-        val currentAmmoText = currentAmmoFormat.format(currentAmmo)
+
+        // Resolve ammo count style from display JSON
+        val snapshot = TACZGunPackRuntimeRegistry.getSnapshot()
+        val displayId = TACZGunPackPresentation.resolveGunDisplayId(snapshot, gunId)
+        val gunDisplay = displayId?.let(TACZClientAssetManager::getGunDisplay)
+        val ammoCountStyle = gunDisplay?.ammoCountStyle ?: AmmoCountStyle.NORMAL
+
+        val currentAmmoText = if (ammoCountStyle == AmmoCountStyle.PERCENT) {
+            currentAmmoFormatPercent.format(currentAmmo.toFloat() / if (maxAmmo == 0) 1f else maxAmmo.toFloat())
+        } else {
+            currentAmmoFormat.format(currentAmmo)
+        }
         val reserveText = when {
             useInventoryAmmo -> ""
             gunData.isReloadInfinite -> "∞"
@@ -114,9 +166,6 @@ internal object LegacyClientOverlayEventHandler {
 
         // Resolve HUD textures through the client asset runtime (same path slot
         // textures use), not by hand-crafting paths from raw display JSON.
-        val snapshot = TACZGunPackRuntimeRegistry.getSnapshot()
-        val displayId = TACZGunPackPresentation.resolveGunDisplayId(snapshot, gunId)
-        val gunDisplay = displayId?.let(TACZClientAssetManager::getGunDisplay)
         val hudPrimary = gunDisplay?.hudTextureLocation?.let(TACZClientAssetManager::getTextureLocation)
         val hudEmpty = gunDisplay?.hudEmptyTextureLocation?.let(TACZClientAssetManager::getTextureLocation)
         val hudTexture = when {
@@ -154,6 +203,38 @@ internal object LegacyClientOverlayEventHandler {
         if (heatInfo != null) {
             renderHeatBar(mc, width, height, heatInfo.current / heatInfo.max, heatInfo.locked)
         }
+    }
+
+    private fun renderCrosshair(mc: Minecraft) {
+        if (mc.gameSettings.hideGUI) {
+            return
+        }
+        val type = CrosshairType.fromConfig(LegacyConfigManager.client.crosshairType)
+        val texture = CrosshairType.getTextureLocation(type)
+        val scaled = ScaledResolution(mc)
+        val x = scaled.scaledWidth / 2 - 8
+        val y = scaled.scaledHeight / 2 - 8
+        GlStateManager.pushMatrix()
+        GlStateManager.enableBlend()
+        GlStateManager.tryBlendFuncSeparate(770, 771, 1, 0)
+        GlStateManager.color(1f, 1f, 1f, 1f)
+        mc.textureManager.bindTexture(texture)
+        Gui.drawModalRectWithCustomSizedTexture(x, y, 0f, 0f, 16, 16, 16f, 16f)
+        GlStateManager.disableBlend()
+        GlStateManager.popMatrix()
+        logFocusedSmokeCrosshair(type, texture)
+    }
+
+    private fun logFocusedSmokeCrosshair(type: CrosshairType, texture: ResourceLocation) {
+        if (!System.getProperty("tacz.focusedSmoke", "false").toBoolean()) {
+            return
+        }
+        val key = "${type.name}|$texture"
+        if (lastFocusedSmokeCrosshairKey == key) {
+            return
+        }
+        lastFocusedSmokeCrosshairKey = key
+        com.tacz.legacy.TACZLegacy.logger.info("[FocusedSmoke] CROSSHAIR_RENDERED type={} texture={}", type.name.lowercase(Locale.ROOT), texture)
     }
 
     private fun renderHeatBar(mc: Minecraft, width: Int, height: Int, rawPercent: Float, locked: Boolean): Unit {

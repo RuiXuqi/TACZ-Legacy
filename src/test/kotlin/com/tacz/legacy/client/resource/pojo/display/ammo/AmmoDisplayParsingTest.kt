@@ -79,6 +79,30 @@ class AmmoDisplayParsingTest {
     }
 
     @Test
+    fun `parse ammo display with entity model`() {
+        val json = """
+        {
+          "model": "tacz:ammo/model/test_geo",
+          "texture": "tacz:ammo/uv/test",
+          "entity": {
+            "model": "tacz:ammo/entity/test_entity_geo",
+            "texture": "tacz:ammo/entity_uv/test_entity"
+          }
+        }
+        """.trimIndent()
+
+        val display = gson.fromJson(json, AmmoDisplay::class.java)
+        assertNotNull(display.ammoEntity)
+        assertEquals(ResourceLocation("tacz", "ammo/entity/test_entity_geo"), display.ammoEntity!!.modelLocation)
+
+        display.init()
+        assertEquals(
+            ResourceLocation("tacz", "textures/ammo/entity_uv/test_entity.png"),
+            display.ammoEntity!!.modelTexture,
+        )
+    }
+
+    @Test
     fun `default transform returns ammo defaults`() {
         val defaultTransform = AmmoTransform.getDefault()
         assertNotNull(defaultTransform)

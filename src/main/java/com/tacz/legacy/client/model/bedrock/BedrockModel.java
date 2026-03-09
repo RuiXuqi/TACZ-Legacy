@@ -278,12 +278,23 @@ public class BedrockModel {
      * Caller must bind texture and set up GL state before calling this.
      */
     public void render() {
+        render(BedrockRenderMode.NORMAL);
+    }
+
+    /**
+     * Render only the illuminated subtree contribution for bloom post-processing.
+     */
+    public void renderBloom() {
+        render(BedrockRenderMode.BLOOM);
+    }
+
+    public void render(BedrockRenderMode mode) {
         float prevBX = OpenGlHelper.lastBrightnessX;
         float prevBY = OpenGlHelper.lastBrightnessY;
 
         GlStateManager.pushMatrix();
         for (BedrockPart model : shouldRender) {
-            model.render();
+            model.render(mode, false);
         }
         GlStateManager.popMatrix();
 
@@ -291,7 +302,7 @@ public class BedrockModel {
         OpenGlHelper.setLightmapTextureCoords(OpenGlHelper.lightmapTexUnit, prevBX, prevBY);
 
         // Execute delegate renderers (e.g. text show) after main pass
-        if (!delegateRenderers.isEmpty()) {
+        if (mode == BedrockRenderMode.NORMAL && !delegateRenderers.isEmpty()) {
             int packedLight = (int) prevBX | ((int) prevBY << 16);
             for (IFunctionalRenderer delegate : delegateRenderers) {
                 delegate.render(packedLight);

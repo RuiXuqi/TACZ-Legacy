@@ -32,6 +32,14 @@
 - 按窗口标题或类名模糊匹配：`./scripts/capture_window.sh "Minecraft 1.12.2"`
 - 截取其他应用（例如 IDEA）：`./scripts/capture_window.sh "jetbrains-idea"`
 
+脚本当前会在 Hyprland 下自动：
+
+- 切到目标窗口所在 workspace
+- 尝试把目标窗口提到前台
+- 等待约 `0.2s` 让 compositor 落稳后再调用 `grim`
+
+这能避免“坐标来自 Minecraft 窗口，但当前 workspace 仍是 VS Code / 浏览器，导致抓到覆盖窗口”的错拍。
+
 ## 与 focused smoke 联动
 
 `scripts/runclient_focused_smoke.sh` 默认会调用工作区内的 `scripts/capture_window.sh`，不再依赖本机私有目录。
@@ -39,9 +47,17 @@
 常见环境变量：
 
 - `FOCUSED_SMOKE_SCREENSHOT=true`
+- `FOCUSED_SMOKE_USE_XVFB=false`（需要可见窗口截图时建议显式关闭；脚本在 `FOCUSED_SMOKE_SCREENSHOT=true` 且未指定时也会默认跳过 `xvfb-run`）
 - `FOCUSED_SMOKE_SCREENSHOT_PLAN='pose_initial|\[FocusedSmoke] ANIMATION_OBSERVED|0;pose_settled|\[FocusedSmoke] ANIMATION_OBSERVED|1'`
+- `FOCUSED_SMOKE_SCREENSHOT_AUTO_FOCUS=true`（默认开启；截图前会尝试把匹配窗口拉到前台，适合第一人称枪焰/镜头这类对前台渲染帧率更敏感的可视采样）
+- `FOCUSED_SMOKE_SCREENSHOT_POST_PASS_GRACE_SECONDS=2`（当目标 marker 出现在服务端 `PASS` 之后的 client 下一帧时很有用，例如 `CAMERA_ANIMATION_APPLIED`、`MUZZLE_FLASH_VISIBLE` 这类晚一点才落日志/截图的可视证据）
 - `FOCUSED_SMOKE_SCREENSHOT_WINDOW_QUERY='Minecraft 1.12.2'`
+- `FOCUSED_SMOKE_REFIT_TYPE='extended_mag'`（focused smoke 自动改装时优先聚焦指定槽位，适合条件渲染验收）
+- `FOCUSED_SMOKE_PASS_AFTER_ANIMATION=true`（只验证动画/准星时，在 `ANIMATION_OBSERVED` 后直接 PASS）
+- `FOCUSED_SMOKE_PASS_AFTER_REFIT=true`（只验证改装预览/附件条件渲染时，在 `REFIT_ATTACHMENT_APPLIED` + `REFIT_PREVIEW_COMPLETE` 后直接 PASS）
 - `FOCUSED_SMOKE_SCREENSHOT_SCRIPT=/custom/path/capture_window.sh`（如需覆盖默认脚本）
+
+补充经验：像 `MUZZLE_FLASH_VISIBLE` 这样与 `PASS` 非常接近的 marker，在当前 focused smoke 退出时序下，`15ms+` 的晚帧截图可能已经被客户端断线界面污染。遇到这类短命视觉效果时，优先尝试 `0ms / 5ms / 10ms` 的更早截图，或把最终验收写成“同轮 runtime marker + 早帧截图联合成立”，不要把被断线页覆盖的晚帧 PNG 当成 feature 本体的反证。
 
 多截图运行结果会写到：
 

@@ -1,10 +1,12 @@
 package com.tacz.legacy.client.renderer.item
 
 import com.tacz.legacy.api.item.IGun
+import com.tacz.legacy.client.model.BedrockAnimatedModel
 import com.tacz.legacy.client.model.BedrockGunModel
 import com.tacz.legacy.client.model.SlotModel
 import com.tacz.legacy.client.model.TACZPerspectiveAwareBakedModel
 import com.tacz.legacy.client.model.bedrock.BedrockModel
+import com.tacz.legacy.client.renderer.bloom.TACZBloomBridge
 import com.tacz.legacy.client.resource.TACZClientAssetManager
 import com.tacz.legacy.client.resource.GunDisplayInstance
 import com.tacz.legacy.client.resource.pojo.display.gun.GunDisplay
@@ -99,6 +101,7 @@ internal object TACZGunItemRenderer : TileEntityItemStackRenderer() {
     private fun renderGunModel(stack: ItemStack, display: GunDisplay, displayInstance: GunDisplayInstance?) {
         val textureLocation: ResourceLocation = displayInstance?.modelTexture ?: display.modelTexture ?: return
         val registeredTexture: ResourceLocation = TACZClientAssetManager.getTextureLocation(textureLocation) ?: return
+        val transformType = TACZPerspectiveAwareBakedModel.getCurrentTransformType()
 
         val runtimeModel = displayInstance?.gunModel
         val fallbackModel = if (runtimeModel == null) {
@@ -129,14 +132,53 @@ internal object TACZGunItemRenderer : TileEntityItemStackRenderer() {
         if (runtimeModel != null) {
             runtimeModel.renderHand = false
             runtimeModel.render(stack)
+            captureBloomIfSupported(transformType, registeredTexture, runtimeModel) {
+                runtimeModel.renderHand = false
+                runtimeModel.renderBloom(stack)
+            }
             runtimeModel.cleanAnimationTransform()
             runtimeModel.cleanCameraAnimationTransform()
         } else {
-            fallbackModel?.render()
+            val staticModel = fallbackModel ?: return
+            staticModel.render()
+            captureBloomIfSupported(transformType, registeredTexture, staticModel) {
+                staticModel.renderBloom()
+            }
         }
 
         GlStateManager.disableBlend()
         GlStateManager.disableRescaleNormal()
         GlStateManager.popMatrix()
+    }
+
+    private fun captureBloomIfSupported(
+        transformType: ItemCameraTransforms.TransformType,
+        texture: ResourceLocation,
+        model: BedrockModel?,
+        renderBloom: () -> Unit,
+    ) {
+        if (model == null) {
+            return
+        }
+        if (transformType == ItemCameraTransforms.TransformType.FIRST_PERSON_LEFT_HAND ||
+            transformType == ItemCameraTransforms.TransformType.FIRST_PERSON_RIGHT_HAND
+        ) {
+            return
+        }
+
+        when (model) {
+            is BedrockAnimatedModel -> {
+                val snapshot = model.captureRenderState()
+                TACZBloomBridge.captureCurrentModelBloom(texture) {
+                    model.restoreRenderState(snapshot)
+                    renderBloom()
+                    model.cleanAnimationTransform()
+                    model.cleanCameraAnimationTransform()
+                }
+            }
+            else -> {
+                TACZBloomBridge.captureCurrentModelBloom(texture, renderBloom)
+            }
+        }
     }
 }

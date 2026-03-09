@@ -63,44 +63,56 @@ public class BedrockPart {
     }
 
     public void render() {
-        if (this.visible) {
-            if (!this.cubes.isEmpty() || !this.children.isEmpty()) {
-                GlStateManager.pushMatrix();
-                this.translateAndRotateAndScale();
+        render(BedrockRenderMode.NORMAL, false);
+    }
 
-                // Save/restore lightmap for illuminated bones.
-                // Children inherit illumination (matching upstream cascade behavior).
-                boolean needsLightRestore = false;
-                float prevBrightnessX = 0;
-                float prevBrightnessY = 0;
-                if (illuminated) {
-                    prevBrightnessX = OpenGlHelper.lastBrightnessX;
-                    prevBrightnessY = OpenGlHelper.lastBrightnessY;
-                    OpenGlHelper.setLightmapTextureCoords(OpenGlHelper.lightmapTexUnit, 240, 240);
-                    needsLightRestore = true;
-                }
+    public void render(BedrockRenderMode mode) {
+        render(mode, false);
+    }
 
-                if (!this.cubes.isEmpty()) {
-                    Tessellator tessellator = Tessellator.getInstance();
-                    BufferBuilder buffer = tessellator.getBuffer();
-                    buffer.begin(GL11.GL_QUADS, DefaultVertexFormats.POSITION_TEX_NORMAL);
-                    for (BedrockCube cube : this.cubes) {
-                        cube.compile(buffer);
-                    }
-                    tessellator.draw();
-                }
-
-                for (BedrockPart part : this.children) {
-                    part.render();
-                }
-
-                if (needsLightRestore) {
-                    OpenGlHelper.setLightmapTextureCoords(OpenGlHelper.lightmapTexUnit, prevBrightnessX, prevBrightnessY);
-                }
-
-                GlStateManager.popMatrix();
-            }
+    public void render(BedrockRenderMode mode, boolean inheritedIllumination) {
+        if (!this.visible) {
+            return;
         }
+        if (this.cubes.isEmpty() && this.children.isEmpty()) {
+            return;
+        }
+
+        boolean subtreeIlluminated = inheritedIllumination || illuminated;
+        boolean renderSelf = mode != BedrockRenderMode.BLOOM || subtreeIlluminated;
+
+        GlStateManager.pushMatrix();
+        this.translateAndRotateAndScale();
+
+        boolean needsLightRestore = false;
+        float prevBrightnessX = 0;
+        float prevBrightnessY = 0;
+        if (subtreeIlluminated && !inheritedIllumination) {
+            prevBrightnessX = OpenGlHelper.lastBrightnessX;
+            prevBrightnessY = OpenGlHelper.lastBrightnessY;
+            OpenGlHelper.setLightmapTextureCoords(OpenGlHelper.lightmapTexUnit, 240, 240);
+            needsLightRestore = true;
+        }
+
+        if (renderSelf && !this.cubes.isEmpty()) {
+            Tessellator tessellator = Tessellator.getInstance();
+            BufferBuilder buffer = tessellator.getBuffer();
+            buffer.begin(GL11.GL_QUADS, DefaultVertexFormats.POSITION_TEX_NORMAL);
+            for (BedrockCube cube : this.cubes) {
+                cube.compile(buffer);
+            }
+            tessellator.draw();
+        }
+
+        for (BedrockPart part : this.children) {
+            part.render(mode, subtreeIlluminated);
+        }
+
+        if (needsLightRestore) {
+            OpenGlHelper.setLightmapTextureCoords(OpenGlHelper.lightmapTexUnit, prevBrightnessX, prevBrightnessY);
+        }
+
+        GlStateManager.popMatrix();
     }
 
     public void translateAndRotateAndScale() {

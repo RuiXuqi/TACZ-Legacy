@@ -88,7 +88,7 @@ public class GunAnimationStateContext extends ItemAnimationStateContext {
     }
 
     public long getLastShootTimestamp() {
-        return processGunOperator(op -> op.getDataHolder().lastShootTimestamp).orElse(-1L);
+        return com.tacz.legacy.client.gameplay.LegacyClientShootCoordinator.INSTANCE.getClientLastShootTimestampMs();
     }
 
     public long getCurrentTimestamp() {
@@ -96,11 +96,7 @@ public class GunAnimationStateContext extends ItemAnimationStateContext {
     }
 
     public void adjustClientShootInterval(long alpha) {
-        processGunOperator(op -> {
-            long timestamp = op.getDataHolder().shootTimestamp;
-            op.getDataHolder().shootTimestamp = timestamp + alpha;
-            return null;
-        });
+        com.tacz.legacy.client.gameplay.LegacyClientShootCoordinator.INSTANCE.adjustClientShootTimestamp(alpha);
     }
 
     public int getAmmoCount() {
@@ -130,8 +126,11 @@ public class GunAnimationStateContext extends ItemAnimationStateContext {
     }
 
     public int getMagExtentLevel() {
-        // Simplified: no attachment data utils yet
-        return 0;
+        if (iGun == null) {
+            return 0;
+        }
+        ResourceLocation attachmentId = iGun.getAttachmentId(currentGunItem, AttachmentType.EXTENDED_MAG);
+        return MathHelper.clamp(GunDataAccessor.getAttachmentExtendedMagLevel(attachmentId), 0, 3);
     }
 
     public int getFireMode() {

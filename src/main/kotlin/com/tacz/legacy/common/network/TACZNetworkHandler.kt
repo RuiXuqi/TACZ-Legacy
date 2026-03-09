@@ -25,6 +25,7 @@ public object TACZNetworkHandler {
         // Client -> Server
         registerC2S<ClientMessageGunSmithCraft>()
         registerC2S<ClientMessageRefitGun>()
+        registerC2S<ClientMessageRefitGunCreative>()
         registerC2S<ClientMessageUnloadAttachment>()
         registerC2S<ClientMessageLaserColor>()
         registerC2S<ClientMessagePlayerShoot>()

@@ -29,6 +29,8 @@ public class ShooterDataHolder {
     @JvmField public var knockbackStrength: Double = -1.0
     @JvmField public var shootCount: Int = 0
     @JvmField public var isCrawling: Boolean = false
+    @JvmField public var heatTimestamp: Long = -1L
+    @JvmField public var scriptData: Any? = null
 
     public fun initialData() {
         shootTimestamp = -1L
@@ -46,5 +48,7 @@ public class ShooterDataHolder {
         sprintTimeS = 0f
         sprintTimestamp = -1L
         shootCount = 0
+        heatTimestamp = -1L
+        scriptData = null
     }
 }

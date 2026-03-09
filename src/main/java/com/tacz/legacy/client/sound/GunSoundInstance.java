@@ -23,7 +23,7 @@ import javax.annotation.Nullable;
  * lookup and directly exposes the requested gun pack asset to the sound engine.</p>
  */
 @SideOnly(Side.CLIENT)
-public class GunSoundInstance extends MovingSound {
+public class GunSoundInstance extends MovingSound implements TACZClientSoundHandle {
     private static final SoundEvent PLACEHOLDER_EVENT = new SoundEvent(new ResourceLocation(TACZLegacy.MOD_ID, "gun"));
 
     private final Entity entity;
@@ -72,6 +72,17 @@ public class GunSoundInstance extends MovingSound {
 
     public ResourceLocation getRegistryName() {
         return registryName;
+    }
+
+    @Nullable
+    @Override
+    public ResourceLocation getSoundId() {
+        return registryName;
+    }
+
+    @Override
+    public void stop() {
+        this.donePlaying = true;
     }
 
     private void updatePosition() {

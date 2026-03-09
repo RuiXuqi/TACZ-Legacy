@@ -26,22 +26,22 @@ public class GunSoundPlayManager {
     private static volatile SoundPlaybackBackend testingPlaybackBackend;
 
     @Nullable
-    public static GunSoundInstance playClientSound(@Nullable Entity entity, @Nullable ResourceLocation soundName, float volume, float pitch, int distance) {
+    public static TACZClientSoundHandle playClientSound(@Nullable Entity entity, @Nullable ResourceLocation soundName, float volume, float pitch, int distance) {
         return playClientSound(entity, soundName, volume, pitch, distance, TACZAudioRequestOrigin.GENERIC);
     }
 
     @Nullable
-    public static GunSoundInstance playAnimationSound(@Nullable Entity entity, @Nullable ResourceLocation soundName, float volume, float pitch, int distance) {
+    public static TACZClientSoundHandle playAnimationSound(@Nullable Entity entity, @Nullable ResourceLocation soundName, float volume, float pitch, int distance) {
         return playClientSound(entity, soundName, volume, pitch, distance, TACZAudioRequestOrigin.ANIMATION);
     }
 
     @Nullable
-    public static GunSoundInstance playNetworkSound(@Nullable Entity entity, @Nullable ResourceLocation soundName, float volume, float pitch, int distance) {
+    public static TACZClientSoundHandle playNetworkSound(@Nullable Entity entity, @Nullable ResourceLocation soundName, float volume, float pitch, int distance) {
         return playClientSound(entity, soundName, volume, pitch, distance, TACZAudioRequestOrigin.SERVER_MESSAGE);
     }
 
     @Nullable
-    private static GunSoundInstance playClientSound(@Nullable Entity entity, @Nullable ResourceLocation soundName, float volume, float pitch, int distance, TACZAudioRequestOrigin origin) {
+    private static TACZClientSoundHandle playClientSound(@Nullable Entity entity, @Nullable ResourceLocation soundName, float volume, float pitch, int distance, TACZAudioRequestOrigin origin) {
         if (soundName == null) {
             return null;
         }
@@ -81,7 +81,7 @@ public class GunSoundPlayManager {
     }
 
     @Nullable
-    private static GunSoundInstance playWithMinecraft(@Nullable Entity entity, ResourceLocation soundName, float volume, float pitch, int distance, TACZAudioRequestOrigin origin) {
+    private static TACZClientSoundHandle playWithMinecraft(@Nullable Entity entity, ResourceLocation soundName, float volume, float pitch, int distance, TACZAudioRequestOrigin origin) {
         if (entity == null) {
             return null;
         }
@@ -98,6 +98,6 @@ public class GunSoundPlayManager {
     @FunctionalInterface
     public interface SoundPlaybackBackend {
         @Nullable
-        GunSoundInstance play(@Nullable Entity entity, ResourceLocation soundName, float volume, float pitch, int distance, TACZAudioRequestOrigin origin);
+        TACZClientSoundHandle play(@Nullable Entity entity, ResourceLocation soundName, float volume, float pitch, int distance, TACZAudioRequestOrigin origin);
     }
 }

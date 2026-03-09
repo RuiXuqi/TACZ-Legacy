@@ -15,10 +15,13 @@ import com.tacz.legacy.client.resource.pojo.model.BedrockModelPOJO;
 import com.tacz.legacy.client.resource.pojo.model.BedrockVersion;
 import com.tacz.legacy.client.resource.pojo.model.BonesItem;
 import org.joml.Quaternionf;
+import org.joml.Vector3f;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.function.Function;
 
@@ -27,6 +30,57 @@ import static com.tacz.legacy.client.model.GunModelConstant.ROOT_NODE;
 public class BedrockAnimatedModel extends BedrockModel implements AnimationListenerSupplier {
     public static final String CAMERA_NODE_NAME = "camera";
     public static final String CONSTRAINT_NODE = "constraint";
+
+    public static final class PartRenderStateSnapshot {
+        public final boolean visible;
+        public final float offsetX;
+        public final float offsetY;
+        public final float offsetZ;
+        public final Quaternionf additionalQuaternion;
+        public final float scaleX;
+        public final float scaleY;
+        public final float scaleZ;
+
+        public PartRenderStateSnapshot(
+                boolean visible,
+                float offsetX,
+                float offsetY,
+                float offsetZ,
+                Quaternionf additionalQuaternion,
+                float scaleX,
+                float scaleY,
+                float scaleZ
+        ) {
+            this.visible = visible;
+            this.offsetX = offsetX;
+            this.offsetY = offsetY;
+            this.offsetZ = offsetZ;
+            this.additionalQuaternion = additionalQuaternion;
+            this.scaleX = scaleX;
+            this.scaleY = scaleY;
+            this.scaleZ = scaleZ;
+        }
+    }
+
+    public static final class RenderStateSnapshot {
+        public final Map<String, PartRenderStateSnapshot> partStates;
+        public final Quaternionf cameraRotation;
+        public final Vector3f constraintTranslation;
+        public final Vector3f constraintRotation;
+
+        public RenderStateSnapshot(
+                Map<String, PartRenderStateSnapshot> partStates,
+                Quaternionf cameraRotation,
+                @Nullable Vector3f constraintTranslation,
+                @Nullable Vector3f constraintRotation
+        ) {
+            this.partStates = partStates;
+            this.cameraRotation = cameraRotation;
+            this.constraintTranslation = constraintTranslation;
+            this.constraintRotation = constraintRotation;
+        }
+    }
+
     private final CameraAnimationObject cameraAnimationObject = new CameraAnimationObject();
     protected @Nullable List<BedrockPart> constraintPath;
     private @Nullable ConstraintObject constraintObject;
@@ -78,6 +132,63 @@ public class BedrockAnimatedModel extends BedrockModel implements AnimationListe
 
     public void cleanCameraAnimationTransform() {
         cameraAnimationObject.rotationQuaternion = new Quaternionf(0.0F, 0.0F, 0.0F, 1.0F);
+    }
+
+    public RenderStateSnapshot captureRenderState() {
+        Map<String, PartRenderStateSnapshot> partStates = new HashMap<>();
+        for (Map.Entry<String, ModelRendererWrapper> entry : modelMap.entrySet()) {
+            BedrockPart part = entry.getValue().getModelRenderer();
+            partStates.put(entry.getKey(), new PartRenderStateSnapshot(
+                    part.visible,
+                    part.offsetX,
+                    part.offsetY,
+                    part.offsetZ,
+                    new Quaternionf(part.additionalQuaternion),
+                    part.xScale,
+                    part.yScale,
+                    part.zScale
+            ));
+        }
+        Vector3f translation = constraintObject != null ? new Vector3f(constraintObject.translationConstraint) : null;
+        Vector3f rotation = constraintObject != null ? new Vector3f(constraintObject.rotationConstraint) : null;
+        return new RenderStateSnapshot(
+                partStates,
+                new Quaternionf(cameraAnimationObject.rotationQuaternion),
+                translation,
+                rotation
+        );
+    }
+
+    public void restoreRenderState(RenderStateSnapshot snapshot) {
+        for (Map.Entry<String, PartRenderStateSnapshot> entry : snapshot.partStates.entrySet()) {
+            ModelRendererWrapper wrapper = modelMap.get(entry.getKey());
+            if (wrapper == null) {
+                continue;
+            }
+            PartRenderStateSnapshot state = entry.getValue();
+            BedrockPart part = wrapper.getModelRenderer();
+            part.visible = state.visible;
+            part.offsetX = state.offsetX;
+            part.offsetY = state.offsetY;
+            part.offsetZ = state.offsetZ;
+            part.additionalQuaternion = new Quaternionf(state.additionalQuaternion);
+            part.xScale = state.scaleX;
+            part.yScale = state.scaleY;
+            part.zScale = state.scaleZ;
+        }
+        cameraAnimationObject.rotationQuaternion = new Quaternionf(snapshot.cameraRotation);
+        if (constraintObject != null) {
+            if (snapshot.constraintTranslation != null) {
+                constraintObject.translationConstraint.set(snapshot.constraintTranslation);
+            } else {
+                constraintObject.translationConstraint.set(0, 0, 0);
+            }
+            if (snapshot.constraintRotation != null) {
+                constraintObject.rotationConstraint.set(snapshot.constraintRotation);
+            } else {
+                constraintObject.rotationConstraint.set(0, 0, 0);
+            }
+        }
     }
 
     /**

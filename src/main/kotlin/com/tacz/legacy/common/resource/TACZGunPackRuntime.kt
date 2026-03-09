@@ -242,6 +242,7 @@ internal data class TACZRuntimeSnapshot(
     val attachmentDisplays: Map<ResourceLocation, TACZDisplayDefinition>,
     val blockDisplays: Map<ResourceLocation, TACZDisplayDefinition>,
     val translations: Map<String, Map<String, String>>,
+    val dataScripts: Map<ResourceLocation, String>,
     val issues: List<String>,
 ) {
     private val gunIdsByItemType: Map<String, List<ResourceLocation>> by lazy {
@@ -272,6 +273,7 @@ internal data class TACZRuntimeSnapshot(
             attachmentDisplays = emptyMap(),
             blockDisplays = emptyMap(),
             translations = emptyMap(),
+            dataScripts = emptyMap(),
             issues = emptyList(),
         )
     }
@@ -283,6 +285,7 @@ internal object TACZGunPackRuntimeRegistry {
 
     internal fun reload(gameDirectory: File): TACZRuntimeSnapshot {
         val packsRoot = File(gameDirectory, TACZLegacy.MOD_ID).apply { mkdirs() }
+        TACZDataScriptManager.reload()
         val loaded = TACZGunPackScanner.scan(packsRoot)
         snapshot = loaded
         TACZLegacy.logger.info(
@@ -323,6 +326,7 @@ internal object TACZGunPackScanner {
     private val ATTACHMENT_DISPLAY_PATTERN: Pattern = Pattern.compile("^assets/([a-z0-9_.-]+)/display/attachments/([\\w/.-]+)\\.json$", Pattern.CASE_INSENSITIVE)
     private val BLOCK_DISPLAY_PATTERN: Pattern = Pattern.compile("^assets/([a-z0-9_.-]+)/display/blocks/([\\w/.-]+)\\.json$", Pattern.CASE_INSENSITIVE)
     private val LANG_PATTERN: Pattern = Pattern.compile("^assets/([a-z0-9_.-]+)/lang/([\\w-]+)\\.(json|lang)$", Pattern.CASE_INSENSITIVE)
+    private val DATA_SCRIPT_PATTERN: Pattern = Pattern.compile("^data/([a-z0-9_.-]+)/scripts/([\\w/.-]+)\\.lua$", Pattern.CASE_INSENSITIVE)
 
     internal fun scan(packsRoot: File): TACZRuntimeSnapshot {
         if (!packsRoot.exists()) {
@@ -346,6 +350,7 @@ internal object TACZGunPackScanner {
         val rawAttachmentDisplays = LinkedHashMap<ResourceLocation, TACZDisplayDefinition>()
         val rawBlockDisplays = LinkedHashMap<ResourceLocation, TACZDisplayDefinition>()
         val rawTranslations = LinkedHashMap<String, LinkedHashMap<String, String>>()
+        val rawDataScripts = LinkedHashMap<ResourceLocation, String>()
         val issues = mutableListOf<String>()
 
         val entries = packsRoot.listFiles()?.sortedBy { it.name.lowercase(Locale.ROOT) }.orEmpty()
@@ -373,6 +378,7 @@ internal object TACZGunPackScanner {
                         rawAttachmentDisplays = rawAttachmentDisplays,
                         rawBlockDisplays = rawBlockDisplays,
                         rawTranslations = rawTranslations,
+                        rawDataScripts = rawDataScripts,
                         issues = issues,
                     )
                 }
@@ -399,6 +405,7 @@ internal object TACZGunPackScanner {
                             rawAttachmentDisplays = rawAttachmentDisplays,
                             rawBlockDisplays = rawBlockDisplays,
                             rawTranslations = rawTranslations,
+                            rawDataScripts = rawDataScripts,
                             issues = issues,
                         )
                     }
@@ -468,6 +475,7 @@ internal object TACZGunPackScanner {
             ammoDisplays = rawAmmoDisplays.toMap(),
             attachmentDisplays = rawAttachmentDisplays.toMap(),
             blockDisplays = rawBlockDisplays.toMap(),
+            dataScripts = rawDataScripts.toMap(),
             translations = rawTranslations.mapValues { (_, values) -> values.toMap() },
             issues = issues.toList(),
         )
@@ -494,6 +502,7 @@ internal object TACZGunPackScanner {
         rawAttachmentDisplays: MutableMap<ResourceLocation, TACZDisplayDefinition>,
         rawBlockDisplays: MutableMap<ResourceLocation, TACZDisplayDefinition>,
         rawTranslations: MutableMap<String, LinkedHashMap<String, String>>,
+        rawDataScripts: MutableMap<ResourceLocation, String>,
         issues: MutableList<String>,
     ): Unit {
         val packMetaText = source.readText("gunpack.meta.json") ?: return
@@ -606,6 +615,13 @@ internal object TACZGunPackScanner {
                         val translations = parseTranslations(requireNotNull(source.readText(entryName)), extension)
                         if (translations.isNotEmpty()) {
                             rawTranslations.computeIfAbsent(locale) { LinkedHashMap() }.putAll(translations)
+                        }
+                    }
+                    DATA_SCRIPT_PATTERN.matcher(entryName).matches() -> {
+                        val id = resourceIdFrom(entryName, DATA_SCRIPT_PATTERN)
+                        val scriptSource = source.readText(entryName)
+                        if (scriptSource != null) {
+                            rawDataScripts[id] = scriptSource
                         }
                     }
                 }

@@ -7,9 +7,11 @@ import com.tacz.legacy.common.network.message.event.ServerMessageSyncBaseTimesta
 import net.minecraft.item.ItemStack
 import net.minecraft.entity.EntityLivingBase
 import net.minecraft.entity.player.EntityPlayerMP
+import com.tacz.legacy.common.entity.shooter.BurstFireTaskScheduler
 import net.minecraftforge.event.entity.EntityJoinWorldEvent
 import net.minecraftforge.event.entity.living.LivingEvent
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent
+import net.minecraftforge.fml.common.gameevent.TickEvent
 import java.util.function.Supplier
 
 /**
@@ -17,6 +19,15 @@ import java.util.function.Supplier
  * 注册到 Forge EVENT_BUS。
  */
 internal object ShooterTickHandler {
+
+    /**
+     * 每个服务端 tick 驱动 BurstFireTaskScheduler 中的周期任务。
+     * 与上游 TACZ ServerTickEvent → CycleTaskHelper.tick() 行为一致。
+     */
+    @SubscribeEvent
+    fun onServerTick(event: TickEvent.ServerTickEvent) {
+        BurstFireTaskScheduler.tick()
+    }
 
     /**
      * 玩家加入世界时发起 baseTimestamp 同步握手。

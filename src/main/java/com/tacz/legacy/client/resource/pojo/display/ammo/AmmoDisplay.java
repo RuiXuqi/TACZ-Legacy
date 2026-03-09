@@ -21,6 +21,10 @@ public class AmmoDisplay {
     private ResourceLocation slotTextureLocation;
 
     @Nullable
+    @SerializedName("entity")
+    private AmmoEntityDisplay ammoEntity;
+
+    @Nullable
     @SerializedName("transform")
     private AmmoTransform transform;
 
@@ -38,6 +42,11 @@ public class AmmoDisplay {
     @Nullable
     public ResourceLocation getSlotTextureLocation() {
         return slotTextureLocation;
+    }
+
+    @Nullable
+    public AmmoEntityDisplay getAmmoEntity() {
+        return ammoEntity;
     }
 
     @Nullable
@@ -59,6 +68,9 @@ public class AmmoDisplay {
         }
         if (slotTextureLocation != null) {
             slotTextureLocation = expandTexturePath(slotTextureLocation);
+        }
+        if (ammoEntity != null && ammoEntity.modelTexture != null) {
+            ammoEntity.modelTexture = expandTexturePath(ammoEntity.modelTexture);
         }
     }
 

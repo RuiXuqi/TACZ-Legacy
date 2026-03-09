@@ -16,6 +16,13 @@ internal object FirstPersonRenderMatrices {
         val hasParent: Boolean,
     )
 
+    internal data class ResolvedPositioningPaths(
+        val idlePath: List<PositioningNode>?,
+        val aimingPath: List<PositioningNode>?,
+        val usedIdleFallback: Boolean,
+        val usedAimingFallback: Boolean,
+    )
+
     internal fun fromBedrockPath(nodePath: List<BedrockPart>?): List<PositioningNode>? {
         return nodePath?.map { part ->
             PositioningNode(
@@ -65,6 +72,20 @@ internal object FirstPersonRenderMatrices {
         return combined
     }
 
+    internal fun resolvePositioningPaths(
+        idlePath: List<PositioningNode>?,
+        aimingPath: List<PositioningNode>?,
+    ): ResolvedPositioningPaths {
+        val normalizedIdle = idlePath?.takeIf { it.isNotEmpty() }
+        val normalizedAiming = aimingPath?.takeIf { it.isNotEmpty() }
+        return ResolvedPositioningPaths(
+            idlePath = normalizedIdle ?: normalizedAiming,
+            aimingPath = normalizedAiming ?: normalizedIdle,
+            usedIdleFallback = normalizedIdle == null && normalizedAiming != null,
+            usedAimingFallback = normalizedAiming == null && normalizedIdle != null,
+        )
+    }
+
     internal fun resolveScopeViewSwitchIndex(views: IntArray?, zoomNumber: Int): Int {
         if (views == null || views.isEmpty()) {
             return 0
@@ -104,5 +125,12 @@ internal object FirstPersonRenderMatrices {
         return Matrix4f()
             .translation(blendedTranslation)
             .rotate(blendedRotation)
+    }
+
+    internal fun isFinite(matrix: Matrix4f): Boolean {
+        return matrix.m00().isFinite() && matrix.m01().isFinite() && matrix.m02().isFinite() && matrix.m03().isFinite() &&
+            matrix.m10().isFinite() && matrix.m11().isFinite() && matrix.m12().isFinite() && matrix.m13().isFinite() &&
+            matrix.m20().isFinite() && matrix.m21().isFinite() && matrix.m22().isFinite() && matrix.m23().isFinite() &&
+            matrix.m30().isFinite() && matrix.m31().isFinite() && matrix.m32().isFinite() && matrix.m33().isFinite()
     }
 }

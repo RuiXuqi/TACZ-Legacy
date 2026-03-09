@@ -34,6 +34,15 @@ public object GunDataAccessor {
         val attachment = TACZGunPackRuntimeRegistry.getSnapshot().attachments[attachmentId] ?: return null
         return AttachmentMeleeCombatData.fromRawJson(attachment.data.raw)
     }
+
+    @JvmStatic
+    public fun getAttachmentExtendedMagLevel(attachmentId: ResourceLocation?): Int {
+        if (attachmentId == null || attachmentId == DefaultAssets.EMPTY_ATTACHMENT_ID) {
+            return 0
+        }
+        val attachment = TACZGunPackRuntimeRegistry.getSnapshot().attachments[attachmentId] ?: return 0
+        return attachment.data.extendedMagLevel.coerceIn(0, 3)
+    }
 }
 
 /**
@@ -43,6 +52,8 @@ public class GunCombatData private constructor(
     public val ammoId: ResourceLocation?,
     public val ammoAmount: Int,
     public val roundsPerMinute: Int,
+    public val fireSoundMultiplier: Float,
+    public val silenceSoundMultiplier: Float,
     public val canSlide: Boolean,
     public val boltType: BoltType,
     public val drawTimeS: Float,
@@ -54,13 +65,22 @@ public class GunCombatData private constructor(
     public val emptyReloadFeedingTimeS: Float,
     public val emptyReloadFinishingTimeS: Float,
     public val boltTimeS: Float,
+    public val boltFeedTimeS: Float,
     public val fireModesSet: List<String>,
     public val burstMinInterval: Float,
     public val burstCount: Int,
+    public val burstShootIntervalMillis: Long,
+    public val burstContinuousShoot: Boolean,
     public val hasHeatData: Boolean,
     public val heatMax: Float,
+    public val heatPerShot: Float,
+    public val heatCoolingMultiplier: Float,
+    public val heatCoolingDelayMs: Long,
+    public val heatOverHeatTimeMs: Long,
     public val isReloadInfinite: Boolean,
     public val reloadType: String,
+    public val scriptId: ResourceLocation?,
+    public val scriptParams: Map<String, Any>?,
     public val meleeData: GunMeleeCombatData?,
     public val bulletData: BulletCombatData,
 ) {
@@ -72,6 +92,15 @@ public class GunCombatData private constructor(
         return (60_000L / roundsPerMinute)
     }
 
+    public fun getBurstMinIntervalMs(): Long {
+        if (burstMinInterval <= 0f) return 0L
+        return (burstMinInterval * 1000f).toLong()
+    }
+
+    public fun getBurstShootIntervalMs(): Long = burstShootIntervalMillis
+
+    public fun isContinuousBurst(): Boolean = burstContinuousShoot
+
     public fun canSlide(): Boolean = canSlide
 
     public companion object {
@@ -82,6 +111,9 @@ public class GunCombatData private constructor(
             val canSlide = raw.getAsJsonPrimitive("can_slide")?.asBoolean
                 ?: raw.getAsJsonPrimitive("canSlide")?.asBoolean
                 ?: true
+            val fireSound = raw.safeGetObject("fire_sound")
+            val fireSoundMultiplier = fireSound?.getAsJsonPrimitive("fire_multiplier")?.asFloat ?: 1.0f
+            val silenceSoundMultiplier = fireSound?.getAsJsonPrimitive("silence_multiplier")?.asFloat ?: 1.0f
 
             val drawTime = raw.getAsJsonPrimitive("draw_time")?.asFloat ?: 0.35f
             val putAwayTime = raw.getAsJsonPrimitive("put_away_time")?.asFloat ?: 0.35f
@@ -89,25 +121,53 @@ public class GunCombatData private constructor(
 
             val reloadObj = raw.safeGetObject("reload")
             val feedObj = reloadObj?.safeGetObject("feed")
-            val feedingTime = feedObj?.getAsJsonPrimitive("time")?.asFloat
-                ?: reloadObj?.getAsJsonPrimitive("feeding_time")?.asFloat ?: 1.0f
-            val finishingTime = reloadObj?.getAsJsonPrimitive("finishing_time")?.asFloat ?: 0.5f
-            val emptyFeedingTime = reloadObj?.getAsJsonPrimitive("empty_feeding_time")?.asFloat ?: feedingTime
-            val emptyFinishingTime = reloadObj?.getAsJsonPrimitive("empty_finishing_time")?.asFloat ?: finishingTime
+            val cooldownObj = reloadObj?.safeGetObject("cooldown")
+            val feedingTime = feedObj?.getAsJsonPrimitive("tactical")?.asFloat
+                ?: feedObj?.getAsJsonPrimitive("time")?.asFloat
+                ?: reloadObj?.getAsJsonPrimitive("feeding_time")?.asFloat
+                ?: 1.0f
+            val emptyFeedingTime = feedObj?.getAsJsonPrimitive("empty")?.asFloat
+                ?: reloadObj?.getAsJsonPrimitive("empty_feeding_time")?.asFloat
+                ?: feedingTime
+            val finishingTime = cooldownObj?.getAsJsonPrimitive("tactical")?.asFloat
+                ?: reloadObj?.getAsJsonPrimitive("finishing_time")?.asFloat
+                ?: 0.5f
+            val emptyFinishingTime = cooldownObj?.getAsJsonPrimitive("empty")?.asFloat
+                ?: reloadObj?.getAsJsonPrimitive("empty_finishing_time")?.asFloat
+                ?: finishingTime
             val isInfinite = reloadObj?.getAsJsonPrimitive("infinite")?.asBoolean ?: false
             val reloadType = reloadObj?.getAsJsonPrimitive("type")?.asString ?: "magazine"
 
             val boltTime = raw.getAsJsonPrimitive("bolt_time")?.asFloat ?: 0.5f
+            val boltFeedTime = raw.getAsJsonPrimitive("bolt_feed_time")?.asFloat ?: -1f
 
-            val burstObj = raw.safeGetObject("burst")
-            val burstInterval = burstObj?.getAsJsonPrimitive("min_interval")?.asFloat ?: 0.05f
+            val burstObj = raw.safeGetObject("burst_data") ?: raw.safeGetObject("burst")
+            val burstInterval = burstObj?.getAsJsonPrimitive("min_interval")?.asFloat ?: 1.0f
             val burstCount = burstObj?.getAsJsonPrimitive("count")?.asInt ?: 3
+            val burstBpm = burstObj?.getAsJsonPrimitive("bpm")?.asInt ?: 200
+            val burstShootIntervalMs = if (burstBpm > 0) 60_000L / burstBpm else 300L
+            val burstContinuousShoot = burstObj?.getAsJsonPrimitive("continuous_shoot")?.asBoolean ?: false
 
             val fireModes = raw.getAsJsonArray("fire_mode")?.map { it.asString } ?: listOf("semi")
 
             val heatObj = raw.safeGetObject("heat")
             val hasHeat = heatObj != null
             val heatMax = heatObj?.getAsJsonPrimitive("max")?.asFloat ?: 100.0f
+            val heatPerShot = heatObj?.getAsJsonPrimitive("per_shot")?.asFloat ?: 3.0f
+            val heatCoolingMultiplier = heatObj?.getAsJsonPrimitive("cooling_multiplier")?.asFloat ?: 1.0f
+            val heatCoolingDelayMs = heatObj?.getAsJsonPrimitive("cooling_delay")?.asLong ?: 1000L
+            val heatOverHeatTimeMs = heatObj?.getAsJsonPrimitive("over_heat_time")?.asLong ?: 3000L
+
+            val scriptId = raw.getAsJsonPrimitive("script")?.asString?.takeIf { it.isNotBlank() }?.let(::ResourceLocation)
+
+            val scriptParams: Map<String, Any>? = raw.safeGetObject("script_param")?.entrySet()?.associate { (k, v) ->
+                k to when {
+                    v.isJsonPrimitive && v.asJsonPrimitive.isNumber -> v.asDouble as Any
+                    v.isJsonPrimitive && v.asJsonPrimitive.isBoolean -> v.asBoolean as Any
+                    v.isJsonPrimitive && v.asJsonPrimitive.isString -> v.asString as Any
+                    else -> v.toString() as Any
+                }
+            }
 
             val meleeObj = raw.safeGetObject("melee")
             val meleeData = if (meleeObj != null) {
@@ -189,6 +249,8 @@ public class GunCombatData private constructor(
                 ammoId = def.ammoId,
                 ammoAmount = def.ammoAmount,
                 roundsPerMinute = def.roundsPerMinute,
+                fireSoundMultiplier = fireSoundMultiplier,
+                silenceSoundMultiplier = silenceSoundMultiplier,
                 canSlide = canSlide,
                 boltType = bolt,
                 drawTimeS = drawTime,
@@ -200,13 +262,22 @@ public class GunCombatData private constructor(
                 emptyReloadFeedingTimeS = emptyFeedingTime,
                 emptyReloadFinishingTimeS = emptyFinishingTime,
                 boltTimeS = boltTime,
+                boltFeedTimeS = boltFeedTime,
                 fireModesSet = fireModes,
                 burstMinInterval = burstInterval,
                 burstCount = burstCount,
+                burstShootIntervalMillis = burstShootIntervalMs,
+                burstContinuousShoot = burstContinuousShoot,
                 hasHeatData = hasHeat,
                 heatMax = heatMax,
+                heatPerShot = heatPerShot,
+                heatCoolingMultiplier = heatCoolingMultiplier,
+                heatCoolingDelayMs = heatCoolingDelayMs,
+                heatOverHeatTimeMs = heatOverHeatTimeMs,
                 isReloadInfinite = isInfinite,
                 reloadType = reloadType,
+                scriptId = scriptId,
+                scriptParams = scriptParams,
                 meleeData = meleeData,
                 bulletData = bulletCombatData,
             )

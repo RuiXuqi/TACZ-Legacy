@@ -424,10 +424,30 @@ internal class ModernKineticGunItem : Item(), IGun {
     }
 
     override fun getFireMode(stack: ItemStack): FireMode {
-        val tag = stack.tagCompound ?: return FireMode.UNKNOWN
-        val str = tag.getString(IGun.FIRE_MODE_TAG)
-        return if (str.isBlank()) FireMode.UNKNOWN
-        else try { FireMode.valueOf(str) } catch (_: IllegalArgumentException) { FireMode.UNKNOWN }
+        val gunId = getGunId(stack)
+        val configuredModes = GunDataAccessor.getGunData(gunId)?.fireModesSet.orEmpty()
+        val configuredFallback = configuredModes.firstOrNull()
+            ?.let(::parseFireMode)
+            ?.takeIf { it != FireMode.UNKNOWN }
+
+        val tag = stack.tagCompound
+        val storedMode = tag?.getString(IGun.FIRE_MODE_TAG)
+            ?.takeIf(String::isNotBlank)
+            ?.let {
+                try {
+                    FireMode.valueOf(it)
+                } catch (_: IllegalArgumentException) {
+                    null
+                }
+            }
+
+        if (storedMode != null && storedMode != FireMode.UNKNOWN) {
+            if (configuredModes.isEmpty() || configuredModes.any { mode -> mode.equals(storedMode.name, ignoreCase = true) }) {
+                return storedMode
+            }
+        }
+
+        return configuredFallback ?: storedMode ?: FireMode.UNKNOWN
     }
 
     override fun setFireMode(stack: ItemStack, fireMode: FireMode?) {
@@ -458,10 +478,11 @@ internal class ModernKineticGunItem : Item(), IGun {
 
     override fun useInventoryAmmo(stack: ItemStack): Boolean {
         // 由 gun data 中的 reload.type 决定是否为背包直读
+        // 与上游 TACZ 一致，"inventory" 和 "fuel" 类型都直接从背包读弹
         val gunId = getGunId(stack)
         val gun = TACZGunPackRuntimeRegistry.getSnapshot().guns[gunId] ?: return false
         val reloadType = gun.data.raw.getAsJsonObject("reload")?.get("type")?.asString
-        return reloadType == "inventory"
+        return reloadType == "inventory" || reloadType == "fuel"
     }
 
     override fun hasInventoryAmmo(shooter: EntityLivingBase, stack: ItemStack, needCheckAmmo: Boolean): Boolean {
@@ -642,6 +663,14 @@ internal class ModernKineticGunItem : Item(), IGun {
 
     override fun setOverheatLocked(stack: ItemStack, locked: Boolean) {
         ensureTag(stack).setBoolean(IGun.OVERHEAT_LOCK_TAG, locked)
+    }
+
+    override fun getHeatAmount(stack: ItemStack): Float {
+        return (stack.tagCompound?.getFloat(IGun.HEAT_AMOUNT_TAG) ?: 0f).coerceAtLeast(0f)
+    }
+
+    override fun setHeatAmount(stack: ItemStack, amount: Float) {
+        ensureTag(stack).setFloat(IGun.HEAT_AMOUNT_TAG, amount.coerceAtLeast(0f))
     }
 
     override fun getItemStackDisplayName(stack: ItemStack): String {

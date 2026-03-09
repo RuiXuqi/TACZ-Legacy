@@ -11,6 +11,8 @@ import com.tacz.legacy.client.audio.TACZAudioRuntime
 import com.tacz.legacy.client.sound.GunPackAssetLocator
 import com.tacz.legacy.client.sound.GunPackSoundResourcePack
 import com.tacz.legacy.client.resource.index.ClientAttachmentIndex
+import com.tacz.legacy.client.resource.gltf.GltfAnimationData
+import com.tacz.legacy.client.resource.gltf.GltfAnimationParser
 import com.tacz.legacy.client.resource.pojo.animation.bedrock.AnimationKeyframes
 import com.tacz.legacy.client.resource.pojo.animation.bedrock.BedrockAnimationFile
 import com.tacz.legacy.client.resource.pojo.animation.bedrock.SoundEffectKeyframes
@@ -99,6 +101,9 @@ internal object TACZClientAssetManager {
     /** Parsed bedrock animation files keyed by animation ResourceLocation. */
     private val animations = LinkedHashMap<ResourceLocation, BedrockAnimationFile>()
 
+    /** Parsed glTF animation files keyed by animation ResourceLocation. */
+    private val gltfAnimations = LinkedHashMap<ResourceLocation, GltfAnimationData>()
+
     /** Resolved gun pack sound resource ids referenced by displays / animation keyframes. */
     private val soundResources = LinkedHashSet<ResourceLocation>()
 
@@ -130,6 +135,7 @@ internal object TACZClientAssetManager {
     fun getModel(id: ResourceLocation): ModelData? = models[id]
     fun getTextureLocation(id: ResourceLocation): ResourceLocation? = textures[id]
     fun getAnimationFile(id: ResourceLocation): BedrockAnimationFile? = animations[id]
+    fun getGltfAnimation(id: ResourceLocation): GltfAnimationData? = gltfAnimations[id]
     fun getScript(id: ResourceLocation): LuaTable? = scripts[id]
     fun getGunDisplayInstance(displayId: ResourceLocation): GunDisplayInstance? = gunDisplayInstances[displayId]
     fun getAttachmentIndex(attachmentId: ResourceLocation): ClientAttachmentIndex? = attachmentIndices[attachmentId]
@@ -140,26 +146,25 @@ internal object TACZClientAssetManager {
         null
     }
 
-    /**
-     * Reload all client assets from the [snapshot].
-     * Called after common-side pack loading completes, on the client thread.
-     */
-    fun reload(snapshot: TACZRuntimeSnapshot) {
-        clear()
-        packSources.addAll(snapshot.packs.values.map { it.sourceFile })
-        parseGunDisplayDefinitions(snapshot.gunDisplays)
-        parseAmmoDisplayDefinitions(snapshot.ammoDisplays)
-        parseAttachmentDisplayDefinitions(snapshot.attachmentDisplays)
-        parseBlockDisplayDefinitions(snapshot.blockDisplays)
+    internal data class ClientAssetLoadPlan(
+        val models: Set<ResourceLocation>,
+        val textures: Set<ResourceLocation>,
+        val animations: Set<ResourceLocation>,
+        val scripts: Set<ResourceLocation>,
+    )
 
-        // Collect all model, texture, animation, and script ResourceLocations referenced by parsed displays
+    internal fun buildAssetLoadPlan(
+        gunDisplays: Collection<GunDisplay>,
+        ammoDisplays: Collection<AmmoDisplay>,
+        attachmentDisplays: Collection<AttachmentDisplay>,
+        blockDisplays: Collection<BlockDisplay>,
+    ): ClientAssetLoadPlan {
         val neededModels = LinkedHashSet<ResourceLocation>()
         val neededTextures = LinkedHashSet<ResourceLocation>()
         val neededAnimations = LinkedHashSet<ResourceLocation>()
         val neededScripts = LinkedHashSet<ResourceLocation>()
 
-        // Gun displays
-        for (display in gunDisplays.values) {
+        for (display in gunDisplays) {
             display.modelLocation?.let(neededModels::add)
             display.modelTexture?.let(neededTextures::add)
             display.gunLod?.modelLocation?.let(neededModels::add)
@@ -174,20 +179,20 @@ internal object TACZClientAssetManager {
             display.slotTextureLocation?.let(neededTextures::add)
             display.hudTextureLocation?.let(neededTextures::add)
             display.hudEmptyTextureLocation?.let(neededTextures::add)
-            // Collect script locations; default to tacz:default_state_machine if not specified
+            display.muzzleFlash?.texture?.let(neededTextures::add)
             val scriptLoc = display.stateMachineLocation ?: ResourceLocation("tacz", "default_state_machine")
             neededScripts.add(scriptLoc)
         }
 
-        // Ammo displays
-        for (display in ammoDisplays.values) {
+        for (display in ammoDisplays) {
             display.modelLocation?.let(neededModels::add)
             display.modelTexture?.let(neededTextures::add)
             display.slotTextureLocation?.let(neededTextures::add)
+            display.ammoEntity?.modelLocation?.let(neededModels::add)
+            display.ammoEntity?.modelTexture?.let(neededTextures::add)
         }
 
-        // Attachment displays
-        for (display in attachmentDisplays.values) {
+        for (display in attachmentDisplays) {
             display.model?.let(neededModels::add)
             display.texture?.let(neededTextures::add)
             display.slotTextureLocation?.let(neededTextures::add)
@@ -195,17 +200,42 @@ internal object TACZClientAssetManager {
             display.attachmentLod?.modelTexture?.let(neededTextures::add)
         }
 
-        // Block displays
-        for (display in blockDisplays.values) {
+        for (display in blockDisplays) {
             display.modelLocation?.let(neededModels::add)
             display.modelTexture?.let(neededTextures::add)
         }
 
+        return ClientAssetLoadPlan(
+            models = neededModels,
+            textures = neededTextures,
+            animations = neededAnimations,
+            scripts = neededScripts,
+        )
+    }
+
+    /**
+     * Reload all client assets from the [snapshot].
+     * Called after common-side pack loading completes, on the client thread.
+     */
+    fun reload(snapshot: TACZRuntimeSnapshot) {
+        clear()
+        packSources.addAll(snapshot.packs.values.map { it.sourceFile })
+        parseGunDisplayDefinitions(snapshot.gunDisplays)
+        parseAmmoDisplayDefinitions(snapshot.ammoDisplays)
+        parseAttachmentDisplayDefinitions(snapshot.attachmentDisplays)
+        parseBlockDisplayDefinitions(snapshot.blockDisplays)
+        val loadPlan = buildAssetLoadPlan(
+            gunDisplays = gunDisplays.values,
+            ammoDisplays = ammoDisplays.values,
+            attachmentDisplays = attachmentDisplays.values,
+            blockDisplays = blockDisplays.values,
+        )
+
         // Load assets from each pack
         for (pack in snapshot.packs.values) {
-            loadAssetsFromPack(pack.sourceFile, neededModels, neededTextures, neededAnimations, neededScripts)
+            loadAssetsFromPack(pack.sourceFile, loadPlan.models, loadPlan.textures, loadPlan.animations, loadPlan.scripts)
         }
-        loadAssetsFromClasspath(neededModels, neededTextures, neededAnimations, neededScripts)
+        loadAssetsFromClasspath(loadPlan.models, loadPlan.textures, loadPlan.animations, loadPlan.scripts)
 
         // Resolve scripts with dependency-aware retry (scripts use require() to reference each other)
         resolveAllScripts()
@@ -223,9 +253,9 @@ internal object TACZClientAssetManager {
 
         val totalDisplays = gunDisplays.size + ammoDisplays.size + attachmentDisplays.size + blockDisplays.size
         TACZLegacy.logger.info(MARKER,
-            "Client assets reloaded: {} displays (gun={}, ammo={}, attach={}, block={}), {} models, {} textures, {} animations, {} scripts",
+            "Client assets reloaded: {} displays (gun={}, ammo={}, attach={}, block={}), {} models, {} textures, {} animations (bedrock={}, gltf={}), {} scripts",
             totalDisplays, gunDisplays.size, ammoDisplays.size, attachmentDisplays.size, blockDisplays.size,
-            models.size, textures.size, animations.size, scripts.size)
+            models.size, textures.size, animations.size + gltfAnimations.size, animations.size, gltfAnimations.size, scripts.size)
 
         // Build GunDisplayInstance for each gun display
         buildGunDisplayInstances()
@@ -274,6 +304,7 @@ internal object TACZClientAssetManager {
         models.clear()
         textures.clear()
         animations.clear()
+        gltfAnimations.clear()
         soundResources.clear()
         audioReferences.clear()
         packSources.clear()
@@ -390,10 +421,15 @@ internal object TACZClientAssetManager {
             }
         }
         for (animLoc in neededAnimations) {
-            if (animations.containsKey(animLoc)) continue
-            val resourcePath = "assets/${animLoc.namespace}/animations/${animLoc.path}.animation.json"
-            openClasspathResource(resourcePath)?.bufferedReader(StandardCharsets.UTF_8)?.use { reader ->
+            if (animations.containsKey(animLoc) || gltfAnimations.containsKey(animLoc)) continue
+            val bedrockPath = "assets/${animLoc.namespace}/animations/${animLoc.path}.animation.json"
+            val gltfPath = "assets/${animLoc.namespace}/animations/${animLoc.path}.gltf"
+            openClasspathResource(bedrockPath)?.bufferedReader(StandardCharsets.UTF_8)?.use { reader ->
                 loadAnimationFromJson(animLoc, reader.readText())
+            } ?: openClasspathResource(gltfPath)?.bufferedReader(StandardCharsets.UTF_8)?.use { reader ->
+                loadGltfAnimationFromJson(animLoc, reader.readText()) { uri ->
+                    openClasspathResource(resolveAnimationBufferPath(animLoc, uri))?.use { it.readBytes() }
+                }
             }
         }
         for (scriptLoc in neededScripts) {
@@ -444,12 +480,25 @@ internal object TACZClientAssetManager {
                     }
                 }
                 for (animLoc in neededAnimations) {
-                    if (animations.containsKey(animLoc)) continue
-                    val entryPath = "assets/${animLoc.namespace}/animations/${animLoc.path}.animation.json"
-                    val entry = zip.getEntry(entryPath) ?: continue
+                    if (animations.containsKey(animLoc) || gltfAnimations.containsKey(animLoc)) continue
+                    val bedrockPath = "assets/${animLoc.namespace}/animations/${animLoc.path}.animation.json"
+                    val gltfPath = "assets/${animLoc.namespace}/animations/${animLoc.path}.gltf"
+                    val bedrockEntry = zip.getEntry(bedrockPath)
+                    val gltfEntry = zip.getEntry(gltfPath)
                     try {
-                        val json = zip.getInputStream(entry).bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
-                        loadAnimationFromJson(animLoc, json)
+                        when {
+                            bedrockEntry != null -> {
+                                val json = zip.getInputStream(bedrockEntry).bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
+                                loadAnimationFromJson(animLoc, json)
+                            }
+                            gltfEntry != null -> {
+                                val json = zip.getInputStream(gltfEntry).bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
+                                loadGltfAnimationFromJson(animLoc, json) { uri ->
+                                    val resolvedEntry = zip.getEntry(resolveAnimationBufferPath(animLoc, uri)) ?: return@loadGltfAnimationFromJson null
+                                    zip.getInputStream(resolvedEntry).use { it.readBytes() }
+                                }
+                            }
+                        }
                     } catch (e: Exception) {
                         TACZLegacy.logger.warn(MARKER, "Failed to load animation {} from {}", animLoc, file.name, e)
                     }
@@ -504,12 +553,23 @@ internal object TACZClientAssetManager {
             }
         }
         for (animLoc in neededAnimations) {
-            if (animations.containsKey(animLoc)) continue
-            val filePath = root.toPath().resolve("assets/${animLoc.namespace}/animations/${animLoc.path}.animation.json")
-            if (!Files.isRegularFile(filePath)) continue
+            if (animations.containsKey(animLoc) || gltfAnimations.containsKey(animLoc)) continue
+            val bedrockPath = root.toPath().resolve("assets/${animLoc.namespace}/animations/${animLoc.path}.animation.json")
+            val gltfPath = root.toPath().resolve("assets/${animLoc.namespace}/animations/${animLoc.path}.gltf")
             try {
-                val json = Files.newBufferedReader(filePath, StandardCharsets.UTF_8).use { it.readText() }
-                loadAnimationFromJson(animLoc, json)
+                when {
+                    Files.isRegularFile(bedrockPath) -> {
+                        val json = Files.newBufferedReader(bedrockPath, StandardCharsets.UTF_8).use { it.readText() }
+                        loadAnimationFromJson(animLoc, json)
+                    }
+                    Files.isRegularFile(gltfPath) -> {
+                        val json = Files.newBufferedReader(gltfPath, StandardCharsets.UTF_8).use { it.readText() }
+                        loadGltfAnimationFromJson(animLoc, json) { uri ->
+                            val resolved = root.toPath().resolve(resolveAnimationBufferPath(animLoc, uri))
+                            if (Files.isRegularFile(resolved)) Files.readAllBytes(resolved) else null
+                        }
+                    }
+                }
             } catch (e: Exception) {
                 TACZLegacy.logger.warn(MARKER, "Failed to load animation {} from dir {}", animLoc, root.name, e)
             }
@@ -578,6 +638,30 @@ internal object TACZClientAssetManager {
         }
     }
 
+    private fun loadGltfAnimationFromJson(
+        id: ResourceLocation,
+        json: String,
+        resolver: (String) -> ByteArray?,
+    ) {
+        val gltfAnimation = GltfAnimationParser.parse(json) { uri -> resolver(uri) }
+        if (gltfAnimation.animations.isEmpty()) {
+            TACZLegacy.logger.warn(MARKER, "glTF animation file has no animations: {}", id)
+            return
+        }
+        gltfAnimations[id] = gltfAnimation
+    }
+
+    private fun resolveAnimationBufferPath(id: ResourceLocation, uri: String): String {
+        val normalized = uri.replace('\\', '/').removePrefix("./")
+        if (normalized.contains(':')) {
+            val resource = ResourceLocation(normalized)
+            return "assets/${resource.namespace}/animations/${resource.path}"
+        }
+        val baseDir = id.path.substringBeforeLast('/', "")
+        val resolved = if (baseDir.isEmpty()) normalized else "$baseDir/$normalized"
+        return "assets/${id.namespace}/animations/$resolved"
+    }
+
     // ------ Script loading ------
 
     private fun createSecureGlobals(): Globals {
@@ -594,6 +678,9 @@ internal object TACZClientAssetManager {
 
     private fun loadScriptFromSource(id: ResourceLocation, source: String) {
         val globals = createSecureGlobals()
+        for (lib in luaLibraries) {
+            lib.install(globals)
+        }
         // Install previously loaded scripts as require()-able modules.
         // Gun pack scripts use require("{namespace}_{path}") to reference each other.
         val preload = globals.get("package").get("preload")
@@ -608,7 +695,8 @@ internal object TACZClientAssetManager {
         val chunk = globals.load(source, id.toString())
         val result = chunk.call()
         if (result is LuaTable) {
-            // Install our VM library constants into the chunk table
+            // Also mirror constants onto the returned script table for compatibility
+            // with scripts that access them through `self`/`this` instead of globals.
             for (lib in luaLibraries) {
                 lib.install(result)
             }

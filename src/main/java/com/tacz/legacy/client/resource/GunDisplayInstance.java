@@ -11,13 +11,13 @@ import com.tacz.legacy.api.client.animation.statemachine.LuaStateMachineFactory;
 import com.tacz.legacy.client.animation.statemachine.GunAnimationStateContext;
 import com.tacz.legacy.client.model.BedrockAnimatedModel;
 import com.tacz.legacy.client.model.BedrockGunModel;
+import com.tacz.legacy.client.resource.gltf.GltfAnimationData;
 import com.tacz.legacy.client.resource.pojo.animation.bedrock.BedrockAnimationFile;
 import com.tacz.legacy.client.resource.pojo.display.gun.DefaultAnimationType;
+import com.tacz.legacy.client.resource.pojo.display.gun.AmmoCountStyle;
 import com.tacz.legacy.client.resource.pojo.display.gun.GunDisplay;
 import com.tacz.legacy.client.resource.pojo.display.gun.GunTransform;
-import com.tacz.legacy.client.resource.pojo.display.gun.TextShow;
 import com.tacz.legacy.client.resource.pojo.model.BedrockVersion;
-import com.tacz.legacy.util.ColorHex;
 import net.minecraft.util.ResourceLocation;
 import org.luaj.vm2.LuaTable;
 import org.luaj.vm2.lib.jse.CoerceJavaToLua;
@@ -25,8 +25,6 @@ import org.luaj.vm2.lib.jse.CoerceJavaToLua;
 import javax.annotation.Nullable;
 import java.util.List;
 import java.util.Map;
-
-import org.apache.commons.lang3.StringUtils;
 
 /**
  * 经过处理和校验的枪械显示运行时数据。
@@ -45,6 +43,7 @@ public class GunDisplayInstance {
     private float ironZoom = 1.2f;
     private float zoomModelFov = 70f;
     private boolean showCrosshair = false;
+    private AmmoCountStyle ammoCountStyle = AmmoCountStyle.NORMAL;
 
     private GunDisplayInstance() {}
 
@@ -56,10 +55,10 @@ public class GunDisplayInstance {
             instance.checkAnimation(display, assets);
             instance.checkSounds(display);
             instance.checkTransform(display);
-            instance.checkTextShow(display);
             instance.ironZoom = Math.max(display.getIronZoom(), 1.0f);
             instance.zoomModelFov = Math.min(display.getZoomModelFov(), 70f);
             instance.showCrosshair = display.isShowCrosshair();
+            instance.ammoCountStyle = display.getAmmoCountStyle();
             return instance;
         } catch (Exception e) {
             TACZLegacy.logger.warn("Failed to create GunDisplayInstance: {}", e.getMessage());
@@ -87,8 +86,15 @@ public class GunDisplayInstance {
             controller = new AnimationController(Lists.newArrayList(), gunModel);
         } else {
             BedrockAnimationFile animFile = assets.getAnimationFile(location);
-            if (animFile == null) throw new IllegalArgumentException("animation not found: " + location);
-            controller = Animations.createControllerFromBedrock(animFile, gunModel);
+            if (animFile != null) {
+                controller = Animations.createControllerFromBedrock(animFile, gunModel);
+            } else {
+                GltfAnimationData gltfAnimation = assets.getGltfAnimation(location);
+                if (gltfAnimation == null) {
+                    throw new IllegalArgumentException("animation not found: " + location);
+                }
+                controller = Animations.createControllerFromGltf(gltfAnimation, gunModel);
+            }
         }
         ResourceLocation fallbackLocation = resolveFallbackAnimationLocation(display);
         if (fallbackLocation != null) {
@@ -167,18 +173,6 @@ public class GunDisplayInstance {
         }
     }
 
-    private void checkTextShow(GunDisplay display) {
-        Map<String, TextShow> textShowMap = Maps.newHashMap();
-        display.getTextShows().forEach((key, value) -> {
-            if (StringUtils.isNoneBlank(key)) {
-                int color = ColorHex.colorTextToRgbInt(value.getColorText());
-                value.setColorInt(color);
-                textShowMap.put(key, value);
-            }
-        });
-        gunModel.setTextShowList(textShowMap);
-    }
-
     // --- Getters ---
 
     public BedrockGunModel getGunModel() {
@@ -233,5 +227,9 @@ public class GunDisplayInstance {
 
     public boolean isShowCrosshair() {
         return showCrosshair;
+    }
+
+    public AmmoCountStyle getAmmoCountStyle() {
+        return ammoCountStyle;
     }
 }

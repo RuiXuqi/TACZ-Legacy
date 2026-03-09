@@ -243,9 +243,19 @@ internal object FocusedSmokePlanner {
 internal object FocusedSmokeRuntime {
     private const val ENABLED_PROPERTY: String = "tacz.focusedSmoke"
     private const val AUTO_WORLD_PROPERTY: String = "tacz.focusedSmoke.autoWorld"
+    private const val REGULAR_GUN_PROPERTY: String = "tacz.focusedSmoke.regularGun"
     private const val WORLD_FOLDER_PROPERTY: String = "tacz.focusedSmoke.worldFolder"
     private const val WORLD_NAME_PROPERTY: String = "tacz.focusedSmoke.worldName"
     private const val EXPLOSIVE_GUN_PROPERTY: String = "tacz.focusedSmoke.explosiveGun"
+    private const val DISABLE_EXPLOSIVE_PROPERTY: String = "tacz.focusedSmoke.disableExplosive"
+    private const val DISABLE_ATTACHMENTS_PROPERTY: String = "tacz.focusedSmoke.disableAttachments"
+    private const val REFIT_PREVIEW_PROPERTY: String = "tacz.focusedSmoke.refitPreview"
+    private const val PASS_AFTER_ANIMATION_PROPERTY: String = "tacz.focusedSmoke.passAfterAnimation"
+    private const val PASS_AFTER_REFIT_PROPERTY: String = "tacz.focusedSmoke.passAfterRefit"
+    private const val REQUIRE_TRACER_FRAME_PROPERTY: String = "tacz.focusedSmoke.requireTracerFrame"
+    private const val SKIP_RELOAD_PROPERTY: String = "tacz.focusedSmoke.skipReload"
+    private const val REGULAR_SHOT_PITCH_PROPERTY: String = "tacz.focusedSmoke.regularShotPitch"
+    private const val REGULAR_SHOT_YAW_PROPERTY: String = "tacz.focusedSmoke.regularShotYaw"
 
     private val loggedKeys = ConcurrentHashMap.newKeySet<String>()
 
@@ -265,6 +275,18 @@ internal object FocusedSmokeRuntime {
 
     @Volatile
     internal var regularProjectileObserved: Boolean = false
+        private set
+
+    @Volatile
+    internal var tracerFrameObserved: Boolean = false
+        private set
+
+    @Volatile
+    internal var regularGunFireCount: Int = 0
+        private set
+
+    @Volatile
+    internal var audioPlaybackObserved: Boolean = false
         private set
 
     @Volatile
@@ -299,8 +321,38 @@ internal object FocusedSmokeRuntime {
     internal val worldDisplayName: String
         get() = System.getProperty(WORLD_NAME_PROPERTY, "tacz_focused_smoke_auto")
 
+    internal val forcedRegularGunId: ResourceLocation?
+        get() = parseResourceLocation(System.getProperty(REGULAR_GUN_PROPERTY))
+
     internal val forcedExplosiveGunId: ResourceLocation?
         get() = parseResourceLocation(System.getProperty(EXPLOSIVE_GUN_PROPERTY))
+
+    internal val disableExplosive: Boolean
+        get() = System.getProperty(DISABLE_EXPLOSIVE_PROPERTY, "false").toBoolean()
+
+    internal val disableAttachments: Boolean
+        get() = System.getProperty(DISABLE_ATTACHMENTS_PROPERTY, "false").toBoolean()
+
+    internal val refitPreviewEnabled: Boolean
+        get() = System.getProperty(REFIT_PREVIEW_PROPERTY, "false").toBoolean()
+
+    internal val passAfterAnimationEnabled: Boolean
+        get() = System.getProperty(PASS_AFTER_ANIMATION_PROPERTY, "false").toBoolean()
+
+    internal val passAfterRefitEnabled: Boolean
+        get() = System.getProperty(PASS_AFTER_REFIT_PROPERTY, "false").toBoolean()
+
+    internal val skipReloadEnabled: Boolean
+        get() = System.getProperty(SKIP_RELOAD_PROPERTY, "false").toBoolean()
+
+    internal val requireTracerFrameEnabled: Boolean
+        get() = System.getProperty(REQUIRE_TRACER_FRAME_PROPERTY, "false").toBoolean()
+
+    internal val regularShotPitchOverride: Float?
+        get() = System.getProperty(REGULAR_SHOT_PITCH_PROPERTY)?.toFloatOrNull()
+
+    internal val regularShotYawOverride: Float?
+        get() = System.getProperty(REGULAR_SHOT_YAW_PROPERTY)?.toFloatOrNull()
 
     @Synchronized
     internal fun currentPlan(snapshot: TACZRuntimeSnapshot = TACZGunPackRuntimeRegistry.getSnapshot()): FocusedSmokePlan? {
@@ -326,6 +378,9 @@ internal object FocusedSmokeRuntime {
         serverGearReady = false
         animationObserved = false
         regularProjectileObserved = false
+        tracerFrameObserved = false
+        regularGunFireCount = 0
+        audioPlaybackObserved = false
         explosiveProjectileObserved = false
         explosionObserved = false
         explosiveProjectileSeenAtMs = 0L
@@ -336,13 +391,39 @@ internal object FocusedSmokeRuntime {
     }
 
     private fun applyOverrides(snapshot: TACZRuntimeSnapshot, plan: FocusedSmokePlan): FocusedSmokePlan {
-        val forcedExplosive = forcedExplosiveGunId ?: return plan
+        var updatedPlan = plan
+        if (disableAttachments && updatedPlan.attachmentIds.isNotEmpty()) {
+            logOnce("attachments-disabled", "ATTACHMENTS_DISABLED for_focused_smoke")
+            updatedPlan = updatedPlan.copy(attachmentIds = emptyList())
+        }
+
+        forcedRegularGunId?.let { forcedRegular ->
+            if (!snapshot.guns.containsKey(forcedRegular)) {
+                logOnce("forced-regular-missing", "REGULAR_OVERRIDE_MISSING gun=$forcedRegular")
+            } else {
+                logOnce("forced-regular-using", "REGULAR_OVERRIDE gun=$forcedRegular")
+                updatedPlan = updatedPlan.copy(
+                    regularGunId = forcedRegular,
+                    attachmentIds = emptyList(),
+                    regularDisplay = FocusedSmokePlanner.describeGunDisplay(snapshot, forcedRegular),
+                )
+            }
+        }
+
+        if (disableExplosive) {
+            if (updatedPlan.explosiveGunId != null) {
+                logOnce("explosive-disabled", "EXPLOSIVE_DISABLED for_focused_smoke")
+            }
+            return updatedPlan.copy(explosiveGunId = null, explosiveDisplay = null)
+        }
+
+        val forcedExplosive = forcedExplosiveGunId ?: return updatedPlan
         if (!snapshot.guns.containsKey(forcedExplosive)) {
             logOnce("forced-explosive-missing", "EXPLOSIVE_OVERRIDE_MISSING gun=$forcedExplosive")
-            return plan
+            return updatedPlan
         }
         logOnce("forced-explosive-using", "EXPLOSIVE_OVERRIDE gun=$forcedExplosive")
-        return plan.copy(
+        return updatedPlan.copy(
             explosiveGunId = forcedExplosive,
             explosiveDisplay = FocusedSmokePlanner.describeGunDisplay(snapshot, forcedExplosive),
         )
@@ -369,7 +450,18 @@ internal object FocusedSmokeRuntime {
         animationObserved = true
         lastAnimationDetails = details
         logOnce("animation-observed", "ANIMATION_OBSERVED $details")
+        if (passAfterAnimationEnabled) {
+            forcePass("animation_only")
+            return
+        }
         maybeLogPass()
+    }
+
+    internal fun markLeftClickSuppressed(details: String) {
+        if (!enabled) {
+            return
+        }
+        logOnce("left-click-suppressed", "LEFT_CLICK_SUPPRESSED $details")
     }
 
     internal fun markRegularShootResult(result: String, gunId: ResourceLocation) {
@@ -378,6 +470,28 @@ internal object FocusedSmokeRuntime {
         }
         log("REGULAR_SHOOT_RESULT gun=$gunId result=$result")
     }
+
+    internal fun markTracerFrameObserved(details: String) {
+        if (!enabled) {
+            return
+        }
+        tracerFrameObserved = true
+        logOnce("tracer-frame-observed", "TRACER_FRAME_OBSERVED $details")
+        maybeLogPass()
+    }
+
+    internal fun markAudioPlaybackObserved(details: String = "") {
+        if (!enabled) {
+            return
+        }
+        audioPlaybackObserved = true
+        logOnce("audio-playback", "AUDIO_PLAYBACK_OBSERVED $details".trim())
+    }
+
+    internal fun expectedRegularFireCount(): Int = 1
+
+    internal fun hasObservedExpectedRegularFireCount(): Boolean =
+        regularGunFireCount >= expectedRegularFireCount()
 
     internal fun markExplosiveShootResult(result: String, gunId: ResourceLocation) {
         if (!enabled) {
@@ -398,6 +512,21 @@ internal object FocusedSmokeRuntime {
 
     internal fun hasPassed(): Boolean = passLogged
 
+    internal fun forcePass(mode: String) {
+        if (!enabled || passLogged) {
+            return
+        }
+        passLogged = true
+        val plan = plannedScenario
+        val attachment = plan?.attachmentSummary() ?: "skipped"
+        val explosive = plan?.explosiveGunId?.toString() ?: "skipped"
+        log(
+            "PASS mode=$mode animation=$animationObserved projectile=$regularProjectileObserved " +
+                "explosion=${plan?.explosiveGunId == null || explosionObserved} regularGun=${plan?.regularGunId ?: "unknown"} " +
+                "explosiveGun=$explosive attachment=$attachment"
+        )
+    }
+
     internal fun statusSummary(): String {
         val plan = plannedScenario
         return buildString {
@@ -405,6 +534,7 @@ internal object FocusedSmokeRuntime {
             append(", gear=").append(serverGearReady)
             append(", animation=").append(animationObserved)
             append(", projectile=").append(regularProjectileObserved)
+            append(", tracerFrame=").append(tracerFrameObserved)
             append(", explosion=").append(explosionObserved)
             append(", plan=").append(plan?.regularGunId ?: "<none>")
             plan?.explosiveGunId?.let { append("/").append(it) }
@@ -418,6 +548,9 @@ internal object FocusedSmokeRuntime {
         }
         val plan = plannedScenario ?: return
         if (!animationObserved || !regularProjectileObserved) {
+            return
+        }
+        if (requireTracerFrameEnabled && !tracerFrameObserved) {
             return
         }
         if (plan.explosiveGunId != null && !explosionObserved) {
@@ -474,9 +607,11 @@ internal object FocusedSmokeRuntime {
         val stack = ItemStack(LegacyItems.MODERN_KINETIC_GUN)
         val iGun = stack.item as IGun
         val gunData = GunDataAccessor.getGunData(gunId)
+        val ammoAmount = gunData?.ammoAmount?.coerceAtLeast(1) ?: 1
+        val initialAmmo = if (ammoAmount > 1) ammoAmount - 1 else ammoAmount
         iGun.setGunId(stack, gunId)
-        iGun.setCurrentAmmoCount(stack, gunData?.ammoAmount?.coerceAtLeast(1) ?: 1)
-        iGun.setDummyAmmoAmount(stack, ((gunData?.ammoAmount ?: 1).coerceAtLeast(1) * 8).coerceAtLeast(96))
+        iGun.setCurrentAmmoCount(stack, initialAmmo)
+        iGun.setDummyAmmoAmount(stack, (ammoAmount * 8).coerceAtLeast(96))
         val fireMode = gunData?.fireModesSet?.firstOrNull()?.let(::parseFireMode) ?: FireMode.UNKNOWN
         iGun.setFireMode(stack, fireMode)
         if ((gunData?.boltType ?: BoltType.OPEN_BOLT) != BoltType.OPEN_BOLT) {
@@ -535,6 +670,7 @@ internal object FocusedSmokeRuntime {
         val explosive = plannedScenario?.explosiveGunId == gunId || GunDataAccessor.getGunData(gunId)?.bulletData?.explosionData?.explode == true
         if (plan.regularGunId == gunId) {
             regularProjectileObserved = true
+            regularGunFireCount++
             logOnce("regular-projectile", "REGULAR_PROJECTILE_OBSERVED gun=$gunId side=SERVER")
         }
         if (explosive) {

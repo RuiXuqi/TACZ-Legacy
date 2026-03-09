@@ -36,6 +36,8 @@ public class LivingEntityDrawGun(
             data.drawTimestamp = System.currentTimeMillis()
         }
 
+        data.heatTimestamp = System.currentTimeMillis()
+
         val drawTime = System.currentTimeMillis() - data.drawTimestamp
         if (drawTime >= 0) {
             if (drawTime < data.currentPutAwayTimeS * 1000) {

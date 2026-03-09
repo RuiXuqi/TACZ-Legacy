@@ -102,6 +102,7 @@ class FocusedSmokePlannerTest {
             attachmentDisplays = emptyMap(),
             blockDisplays = emptyMap(),
             translations = emptyMap(),
+            dataScripts = emptyMap(),
             issues = emptyList(),
         )
 
@@ -163,6 +164,7 @@ class FocusedSmokePlannerTest {
             attachmentDisplays = emptyMap(),
             blockDisplays = emptyMap(),
             translations = emptyMap(),
+            dataScripts = emptyMap(),
             issues = emptyList(),
         )
 
@@ -273,6 +275,7 @@ class FocusedSmokePlannerTest {
             ),
             blockDisplays = emptyMap(),
             translations = emptyMap(),
+            dataScripts = emptyMap(),
             issues = emptyList(),
         )
 
@@ -353,6 +356,7 @@ class FocusedSmokePlannerTest {
             attachmentDisplays = emptyMap(),
             blockDisplays = emptyMap(),
             translations = emptyMap(),
+            dataScripts = emptyMap(),
             issues = emptyList(),
         )
 

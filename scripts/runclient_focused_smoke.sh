@@ -14,21 +14,35 @@ OUT_DIR="$ROOT_DIR/build/smoke-tests"
 mkdir -p "$OUT_DIR"
 LOG_FILE="$OUT_DIR/runclient-focused-smoke-$(date +%Y%m%d-%H%M%S).log"
 TIMEOUT_SECONDS="${1:-300}"
-POLL_INTERVAL_SECONDS="${SMOKE_POLL_INTERVAL_SECONDS:-1}"
+POLL_INTERVAL_SECONDS="${SMOKE_POLL_INTERVAL_SECONDS:-0.1}"
 SHUTDOWN_GRACE_SECONDS="${SMOKE_SHUTDOWN_GRACE_SECONDS:-15}"
 WORLD_FOLDER="${FOCUSED_SMOKE_WORLD_FOLDER:-tacz_focused_smoke_auto}"
 WORLD_NAME="${FOCUSED_SMOKE_WORLD_NAME:-tacz_focused_smoke_auto}"
 REGULAR_GUN="${FOCUSED_SMOKE_REGULAR_GUN:-}"
-EXPLOSIVE_GUN="${FOCUSED_SMOKE_EXPLOSIVE_GUN:-tacz:rpg7}"
+if [[ ${FOCUSED_SMOKE_EXPLOSIVE_GUN+x} ]]; then
+  EXPLOSIVE_GUN="$FOCUSED_SMOKE_EXPLOSIVE_GUN"
+else
+  EXPLOSIVE_GUN="tacz:rpg7"
+fi
+DISABLE_EXPLOSIVE="${FOCUSED_SMOKE_DISABLE_EXPLOSIVE:-false}"
+DISABLE_ATTACHMENTS="${FOCUSED_SMOKE_DISABLE_ATTACHMENTS:-false}"
+REFIT_PREVIEW="${FOCUSED_SMOKE_REFIT_PREVIEW:-false}"
+REFIT_TYPE="${FOCUSED_SMOKE_REFIT_TYPE:-}"
+PASS_AFTER_ANIMATION="${FOCUSED_SMOKE_PASS_AFTER_ANIMATION:-false}"
+PASS_AFTER_REFIT="${FOCUSED_SMOKE_PASS_AFTER_REFIT:-false}"
+SKIP_RELOAD="${FOCUSED_SMOKE_SKIP_RELOAD:-false}"
 AUDIO_BACKEND="${TACZ_AUDIO_BACKEND:-diagnostic}"
 AUDIO_PREFLIGHT="${TACZ_AUDIO_PREFLIGHT:-true}"
 AUDIO_PREFLIGHT_STRICT="${TACZ_AUDIO_PREFLIGHT_STRICT:-false}"
 ENABLE_SCREENSHOT="${FOCUSED_SMOKE_SCREENSHOT:-false}"
+USE_XVFB="${FOCUSED_SMOKE_USE_XVFB:-auto}"
 SCREENSHOT_SCRIPT="${FOCUSED_SMOKE_SCREENSHOT_SCRIPT:-$SCRIPT_DIR/capture_window.sh}"
 SCREENSHOT_WINDOW_QUERY="${FOCUSED_SMOKE_SCREENSHOT_WINDOW_QUERY:-Minecraft 1.12.2}"
+SCREENSHOT_AUTO_FOCUS="${FOCUSED_SMOKE_SCREENSHOT_AUTO_FOCUS:-true}"
 SCREENSHOT_TRIGGER_PATTERN="${FOCUSED_SMOKE_SCREENSHOT_TRIGGER_PATTERN:-\\[FocusedSmoke] ANIMATION_OBSERVED}"
 SCREENSHOT_DELAY_SECONDS="${FOCUSED_SMOKE_SCREENSHOT_DELAY_SECONDS:-1}"
 SCREENSHOT_PLAN="${FOCUSED_SMOKE_SCREENSHOT_PLAN:-inspect_0s|\\[FocusedSmoke] INSPECT_TRIGGERED|0;inspect_1s|\\[FocusedSmoke] INSPECT_TRIGGERED|1;inspect_2s|\\[FocusedSmoke] INSPECT_TRIGGERED|2}"
+SCREENSHOT_POST_PASS_GRACE_SECONDS="${FOCUSED_SMOKE_SCREENSHOT_POST_PASS_GRACE_SECONDS:-2}"
 SCREENSHOT_ARCHIVE_ROOT="$OUT_DIR/focused-smoke-screenshots"
 SCREENSHOT_LATEST_FILE="/tmp/agent_workspace_screenshot.png"
 
@@ -47,6 +61,7 @@ declare -a SCREENSHOT_LABELS=()
 declare -a SCREENSHOT_PATTERNS=()
 declare -a SCREENSHOT_DELAYS=()
 declare -a SCREENSHOT_CAPTURED=()
+PASS_SEEN_AT=-1
 
 sanitize_screenshot_label() {
   printf '%s' "$1" | LC_ALL=C sed 's/[^A-Za-z0-9._ -]/_/g; s/ /_/g; s/^_\+//; s/_\+$//'
@@ -99,9 +114,11 @@ capture_screenshot_spec() {
   local target_file=""
 
   echo "[TACZ-Legacy] focused smoke key moment reached (label=$label, pattern=$pattern). Taking screenshot after ${delay}s delay..."
+  focus_window_if_possible
   if [[ "$delay" != "0" ]]; then
     sleep "$delay"
   fi
+  focus_window_if_possible
 
   if [[ ! -x "$SCREENSHOT_SCRIPT" ]]; then
     echo "[TACZ-Legacy] WARNING: Screenshot script not found at $SCREENSHOT_SCRIPT" >&2
@@ -131,6 +148,59 @@ capture_screenshot_spec() {
   cp "$SCREENSHOT_MANIFEST" "$LAST_SCREENSHOT_MANIFEST"
   echo "[TACZ-Legacy] archived screenshot [$label] -> $target_file"
   SCREENSHOT_CAPTURED[$index]=1
+}
+
+focus_window_if_possible() {
+  local target_window=""
+  local address=""
+  local workspace_name=""
+
+  if [[ "$SCREENSHOT_AUTO_FOCUS" != "true" ]]; then
+    return
+  fi
+  if ! command -v hyprctl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+    return
+  fi
+
+  if [[ -n "$SCREENSHOT_WINDOW_QUERY" ]]; then
+    target_window="$(hyprctl clients -j | jq -c --arg search "$SCREENSHOT_WINDOW_QUERY" '
+      [ .[]
+        | select(
+            ((.class // "") | ascii_downcase | contains($search | ascii_downcase)) or
+            ((.title // "") | ascii_downcase | contains($search | ascii_downcase))
+          )
+      ]
+      | .[0]
+    ')"
+  else
+    target_window="$(hyprctl clients -j | jq -c '[.[] | select(.focusHistoryID == 0)] | .[0]')"
+  fi
+
+  if [[ -z "$target_window" || "$target_window" == "null" ]]; then
+    return
+  fi
+
+  address="$(printf '%s' "$target_window" | jq -r '.address // empty')"
+  workspace_name="$(printf '%s' "$target_window" | jq -r '.workspace.name // empty')"
+  if [[ -n "$workspace_name" && "$workspace_name" != "null" ]]; then
+    hyprctl dispatch workspace "$workspace_name" >/dev/null 2>&1 || true
+  fi
+  if [[ -z "$address" || "$address" == "null" ]]; then
+    return
+  fi
+
+  hyprctl dispatch focuswindow "address:$address" >/dev/null 2>&1 || true
+  sleep 0.2
+}
+
+all_screenshots_captured() {
+  local index=""
+  for index in "${!SCREENSHOT_CAPTURED[@]}"; do
+    if [[ "${SCREENSHOT_CAPTURED[$index]}" -eq 0 ]]; then
+      return 1
+    fi
+  done
+  return 0
 }
 
 process_alive() {
@@ -196,6 +266,12 @@ GRADLE_CMD=(
   "-Dtacz.focusedSmoke.worldFolder=${WORLD_FOLDER}"
   "-Dtacz.focusedSmoke.worldName=${WORLD_NAME}"
   "-Dtacz.focusedSmoke.explosiveGun=${EXPLOSIVE_GUN}"
+  "-Dtacz.focusedSmoke.disableExplosive=${DISABLE_EXPLOSIVE}"
+  "-Dtacz.focusedSmoke.disableAttachments=${DISABLE_ATTACHMENTS}"
+  "-Dtacz.focusedSmoke.refitPreview=${REFIT_PREVIEW}"
+  "-Dtacz.focusedSmoke.passAfterAnimation=${PASS_AFTER_ANIMATION}"
+  "-Dtacz.focusedSmoke.passAfterRefit=${PASS_AFTER_REFIT}"
+  "-Dtacz.focusedSmoke.skipReload=${SKIP_RELOAD}"
   "-Dtacz.audio.backend=${AUDIO_BACKEND}"
   "-Dtacz.audio.preflight=${AUDIO_PREFLIGHT}"
   "-Dtacz.audio.preflight.strict=${AUDIO_PREFLIGHT_STRICT}"
@@ -205,7 +281,17 @@ GRADLE_CMD=(
 if [[ -n "$REGULAR_GUN" ]]; then
   GRADLE_CMD+=("-Dtacz.focusedSmoke.regularGun=${REGULAR_GUN}")
 fi
-if command -v xvfb-run >/dev/null 2>&1; then
+if [[ -n "$REFIT_TYPE" ]]; then
+  GRADLE_CMD+=("-Dtacz.focusedSmoke.refitType=${REFIT_TYPE}")
+fi
+if [[ "$USE_XVFB" == "auto" ]]; then
+  if [[ "$ENABLE_SCREENSHOT" == "true" ]]; then
+    USE_XVFB="false"
+  else
+    USE_XVFB="true"
+  fi
+fi
+if [[ "$USE_XVFB" == "true" ]] && command -v xvfb-run >/dev/null 2>&1; then
   RUN_CMD=(xvfb-run -a "${GRADLE_CMD[@]}")
 else
   RUN_CMD=("${GRADLE_CMD[@]}")
@@ -243,6 +329,20 @@ while true; do
   fi
 
   if grep -q "$SUCCESS_PATTERN" "$LOG_FILE"; then
+    if [[ "$ENABLE_SCREENSHOT" == "true" ]] && ! all_screenshots_captured; then
+      if (( PASS_SEEN_AT < 0 )); then
+        PASS_SEEN_AT=$SECONDS
+        echo "[TACZ-Legacy] focused smoke pass marker reached; waiting up to ${SCREENSHOT_POST_PASS_GRACE_SECONDS}s for remaining screenshot markers..."
+      fi
+      if (( SECONDS - PASS_SEEN_AT < SCREENSHOT_POST_PASS_GRACE_SECONDS )); then
+        if ! process_alive; then
+          collect_run_status
+        fi
+        sleep "$POLL_INTERVAL_SECONDS"
+        continue
+      fi
+      echo "[TACZ-Legacy] focused smoke screenshot grace expired; shutting down with remaining markers unmet."
+    fi
     RESULT="pass"
     echo "[TACZ-Legacy] focused smoke pass marker reached; shutting down client automatically..."
     stop_process_group

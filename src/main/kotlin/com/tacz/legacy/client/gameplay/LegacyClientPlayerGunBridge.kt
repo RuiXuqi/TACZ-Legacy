@@ -2,12 +2,15 @@ package com.tacz.legacy.client.gameplay
 
 import com.tacz.legacy.api.entity.IGunOperator
 import com.tacz.legacy.api.entity.ShootResult
+import com.tacz.legacy.api.client.other.KeepingItemRenderer
 import com.tacz.legacy.api.item.IGun
 import com.tacz.legacy.api.item.gun.FireMode
+import com.tacz.legacy.TACZLegacy
 import com.tacz.legacy.client.animation.statemachine.GunAnimationConstant
 import com.tacz.legacy.client.gui.GunRefitScreen
 import com.tacz.legacy.client.input.LegacyInputExtraCheck
 import com.tacz.legacy.client.input.LegacyKeyBindings
+import com.tacz.legacy.client.sound.TACZClientGunSoundCoordinator
 import com.tacz.legacy.common.config.LegacyConfigManager
 import com.tacz.legacy.common.application.refit.LegacyGunRefitRuntime
 import com.tacz.legacy.common.network.TACZNetworkHandler
@@ -81,7 +84,7 @@ internal object LegacyClientPlayerGunBridge {
     private fun syncHeldGun(player: EntityPlayerSP, operator: IGunOperator): Unit {
         if (!IGun.mainHandHoldGun(player)) {
             if (lastHeldGunSignature != null) {
-                lastHeldGunStack?.let(LegacyClientGunAnimationDriver::beginPutAway)
+                lastHeldGunStack?.let(::beginPutAwayAndKeep)
                 operator.initialData()
                 operator.getDataHolder().currentGunItem = null
                 LegacyClientShootCoordinator.resetTiming()
@@ -99,10 +102,12 @@ internal object LegacyClientPlayerGunBridge {
         }
         val holder = operator.getDataHolder()
         if (signature != lastHeldGunSignature || holder.currentGunItem == null) {
-            lastHeldGunStack?.let(LegacyClientGunAnimationDriver::beginPutAway)
+            lastHeldGunStack?.let(::beginPutAwayAndKeep)
             operator.draw { player.heldItemMainhand }
             TACZNetworkHandler.sendToServer(ClientMessagePlayerDraw())
             LegacyClientGunAnimationDriver.triggerIfInitialized(mainHand, GunAnimationConstant.INPUT_DRAW)
+            val display = LegacyClientGunAnimationDriver.resolveDisplayInstance(mainHand)
+            TACZClientGunSoundCoordinator.playDrawSound(player, display)
             LegacyClientShootCoordinator.resetTiming()
             lastHeldGunSignature = signature
         }
@@ -148,6 +153,9 @@ internal object LegacyClientPlayerGunBridge {
             if (before != operator.getSynReloadState().stateType) {
                 TACZNetworkHandler.sendToServer(ClientMessagePlayerReload())
                 LegacyClientGunAnimationDriver.triggerIfInitialized(stack, GunAnimationConstant.INPUT_RELOAD)
+                val display = LegacyClientGunAnimationDriver.resolveDisplayInstance(stack)
+                val noAmmo = iGun.getCurrentAmmoCount(stack) <= 0
+                TACZClientGunSoundCoordinator.playReloadSound(player, display, noAmmo)
             }
         }
     }
@@ -289,6 +297,8 @@ internal object LegacyClientPlayerGunBridge {
                     if (!before && operator.getSynIsBolting()) {
                         TACZNetworkHandler.sendToServer(ClientMessagePlayerBolt())
                         LegacyClientGunAnimationDriver.triggerIfInitialized(stack, GunAnimationConstant.INPUT_BOLT)
+                        val display = LegacyClientGunAnimationDriver.resolveDisplayInstance(stack)
+                        TACZClientGunSoundCoordinator.playBoltSound(player, display)
                     }
                 } else if (result == ShootResult.UNKNOWN_FAIL && !lastShootKeyDown && fireMode == FireMode.UNKNOWN) {
                     player.sendMessage(TextComponentTranslation("message.tacz.fire_select.fail"))
@@ -296,8 +306,23 @@ internal object LegacyClientPlayerGunBridge {
             }
         } else {
             lastShootSuccess = false
+            TACZClientGunSoundCoordinator.resetDryFireSound()
         }
         lastShootKeyDown = shootDown
+    }
+
+    private fun beginPutAwayAndKeep(stack: ItemStack) {
+        val putAwayTimeMs = LegacyClientGunAnimationDriver.resolvePutAwayTimeMs(stack)
+        val started = LegacyClientGunAnimationDriver.beginPutAway(stack)
+        if (started && putAwayTimeMs > 0L) {
+            val display = LegacyClientGunAnimationDriver.resolveDisplayInstance(stack)
+            TACZClientGunSoundCoordinator.playPutAwaySound(Minecraft.getMinecraft().player, display)
+            KeepingItemRenderer.getRenderer()?.keep(stack.copy(), putAwayTimeMs)
+            if (System.getProperty("tacz.focusedSmoke", "false").toBoolean()) {
+                val gunId = (stack.item as? IGun)?.getGunId(stack)
+                TACZLegacy.logger.info("[FocusedSmoke] KEEP_ITEM_RENDER armed gun={} durationMs={}", gunId ?: "unknown", putAwayTimeMs)
+            }
+        }
     }
 
     private fun processAutoReload(player: EntityPlayerSP, operator: IGunOperator): Unit {

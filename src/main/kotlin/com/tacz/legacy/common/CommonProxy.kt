@@ -3,6 +3,7 @@ package com.tacz.legacy.common
 import com.tacz.legacy.TACZLegacy
 import com.tacz.legacy.common.block.entity.LegacyBlockEntities
 import com.tacz.legacy.common.event.LegacyMissingMappingHandler
+import com.tacz.legacy.common.event.PreventGunLeftClickHandler
 import com.tacz.legacy.common.foundation.FocusedSmokeRuntime
 import com.tacz.legacy.common.gui.LegacyGuiHandler
 import com.tacz.legacy.common.network.TACZNetworkHandler
@@ -23,6 +24,7 @@ internal open class CommonProxy {
         MinecraftForge.EVENT_BUS.register(EntityRegisterer)
         MinecraftForge.EVENT_BUS.register(SoundRegisterer)
         MinecraftForge.EVENT_BUS.register(LegacyMissingMappingHandler)
+        MinecraftForge.EVENT_BUS.register(PreventGunLeftClickHandler)
         MinecraftForge.EVENT_BUS.register(ShooterTickHandler)
         MinecraftForge.EVENT_BUS.register(FocusedSmokeRuntime)
     }

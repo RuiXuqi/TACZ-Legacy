@@ -183,7 +183,7 @@ internal object LegacyClientGunAnimationDriver {
         return trigger(stateMachine, input, stack, display)
     }
 
-    private fun resolvePutAwayTimeMs(stack: ItemStack): Long {
+    internal fun resolvePutAwayTimeMs(stack: ItemStack): Long {
         val iGun = stack.item as? IGun ?: return 0L
         val gunData = GunDataAccessor.getGunData(iGun.getGunId(stack)) ?: return 0L
         return (gunData.putAwayTimeS * 1000f).toLong().coerceAtLeast(0L)

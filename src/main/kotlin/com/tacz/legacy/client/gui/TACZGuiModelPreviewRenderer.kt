@@ -3,6 +3,9 @@ package com.tacz.legacy.client.gui
 import com.tacz.legacy.api.item.IAttachment
 import com.tacz.legacy.api.item.IAmmo
 import com.tacz.legacy.api.item.IGun
+import com.tacz.legacy.api.item.attachment.AttachmentType
+import com.tacz.legacy.client.event.FirstPersonRenderMatrices
+import com.tacz.legacy.client.model.BedrockGunModel
 import com.tacz.legacy.client.model.bedrock.BedrockModel
 import com.tacz.legacy.client.resource.TACZClientAssetManager
 import com.tacz.legacy.client.resource.pojo.TransformScale
@@ -19,7 +22,10 @@ import net.minecraft.client.renderer.GlStateManager
 import net.minecraft.client.renderer.RenderHelper
 import net.minecraft.item.ItemStack
 import net.minecraft.util.ResourceLocation
+import org.joml.Matrix4f
 import org.joml.Vector3f
+import org.lwjgl.BufferUtils
+import org.lwjgl.opengl.GL11
 
 internal object TACZGuiPreviewResolver {
     internal enum class PreviewKind {
@@ -71,12 +77,13 @@ internal object TACZGuiModelPreviewRenderer {
         scale: Float,
         yaw: Float = -30.0f,
         pitch: Float = 12.0f,
+        refitAttachmentType: AttachmentType = AttachmentType.NONE,
     ): Boolean {
         if (stack.isEmpty || scale <= 0.0f) {
             return false
         }
         val target = TACZGuiPreviewResolver.resolve(stack) ?: return false
-        if (target.kind == TACZGuiPreviewResolver.PreviewKind.GUN && renderGunStackPreview(stack, target.displayId, centerX, centerY, scale, yaw, pitch)) {
+        if (target.kind == TACZGuiPreviewResolver.PreviewKind.GUN && renderGunStackPreview(stack, target.displayId, centerX, centerY, scale, yaw, pitch, refitAttachmentType)) {
             return true
         }
         val resolved = when (target.kind) {
@@ -97,6 +104,7 @@ internal object TACZGuiModelPreviewRenderer {
         scale: Float,
         yaw: Float,
         pitch: Float,
+        refitAttachmentType: AttachmentType,
     ): Boolean {
         val display: GunDisplay = TACZClientAssetManager.getGunDisplay(displayId) ?: return false
         val displayInstance = TACZClientAssetManager.getGunDisplayInstance(displayId) ?: return false
@@ -115,6 +123,7 @@ internal object TACZGuiModelPreviewRenderer {
         GlStateManager.rotate(180.0f, 0.0f, 0.0f, 1.0f)
         GlStateManager.rotate(yaw, 0.0f, 1.0f, 0.0f)
         GlStateManager.rotate(pitch, 1.0f, 0.0f, 0.0f)
+        applyPreviewViewMatrix(model, refitAttachmentType)
         GlStateManager.translate(0.0f, 1.8f, 0.0f)
         GlStateManager.scale(-1.0f, -1.0f, 1.0f)
 
@@ -142,6 +151,25 @@ internal object TACZGuiModelPreviewRenderer {
         RenderHelper.disableStandardItemLighting()
         GlStateManager.popMatrix()
         return true
+    }
+
+    private fun applyPreviewViewMatrix(model: BedrockGunModel, refitAttachmentType: AttachmentType) {
+        val matrix = previewViewMatrix(model, refitAttachmentType)
+        GlStateManager.translate(0.0f, 1.5f, 0.0f)
+        multiplyMatrix(matrix)
+        GlStateManager.translate(0.0f, -1.5f, 0.0f)
+    }
+
+    private fun previewViewMatrix(model: BedrockGunModel, refitAttachmentType: AttachmentType): Matrix4f {
+        val nodePath = FirstPersonRenderMatrices.fromBedrockPath(model.getRefitAttachmentViewPath(refitAttachmentType))
+        return FirstPersonRenderMatrices.buildPositioningNodeInverse(nodePath)
+    }
+
+    private fun multiplyMatrix(matrix: Matrix4f) {
+        MATRIX_BUFFER.clear()
+        matrix.get(MATRIX_BUFFER)
+        MATRIX_BUFFER.rewind()
+        GL11.glMultMatrix(MATRIX_BUFFER)
     }
 
     private fun resolveGun(displayId: ResourceLocation): ResolvedPreviewModel? {
@@ -249,4 +277,6 @@ internal object TACZGuiModelPreviewRenderer {
     }
 
     private fun averageScale(vector: Vector3f): Float = (vector.x + vector.y + vector.z) / 3.0f
+
+    private val MATRIX_BUFFER = BufferUtils.createFloatBuffer(16)
 }

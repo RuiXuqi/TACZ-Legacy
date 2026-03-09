@@ -5,6 +5,7 @@ import com.tacz.legacy.api.item.IGun
 import com.tacz.legacy.api.item.attachment.AttachmentType
 import com.tacz.legacy.common.item.LegacyItems
 import com.tacz.legacy.common.resource.GunDataAccessor
+import com.tacz.legacy.common.resource.TACZGunPackPresentation
 import com.tacz.legacy.common.resource.TACZGunPackRuntimeRegistry
 import net.minecraft.item.ItemStack
 
@@ -54,6 +55,27 @@ internal object LegacyGunRefitRuntime {
             val attachment = IAttachment.getIAttachmentOrNull(slot.stack) ?: return@filter false
             attachment.getType(slot.stack) == selectedType && iGun.allowAttachment(gunStack, slot.stack)
         }
+    }
+
+    fun compatibleCreativeAttachments(
+        gunStack: ItemStack,
+        selectedType: AttachmentType,
+    ): List<ItemStack> {
+        if (selectedType == AttachmentType.NONE) {
+            return emptyList()
+        }
+        val iGun = IGun.getIGunOrNull(gunStack) ?: return emptyList()
+        val snapshot = TACZGunPackRuntimeRegistry.getSnapshot()
+        return TACZGunPackPresentation.sortedAttachments(snapshot)
+            .asSequence()
+            .filter { attachment -> AttachmentType.fromSerializedName(attachment.index.type) == selectedType }
+            .map { attachment ->
+                ItemStack(LegacyItems.ATTACHMENT).apply {
+                    LegacyItems.ATTACHMENT.setAttachmentId(this, attachment.id)
+                }
+            }
+            .filter { attachmentStack -> iGun.allowAttachment(gunStack, attachmentStack) }
+            .toList()
     }
 
     fun displayedAttachment(gunStack: ItemStack, type: AttachmentType): ItemStack {

@@ -30,7 +30,8 @@ public class AttachmentRender implements IFunctionalRenderer {
             ItemStack attachmentItem,
             @Nullable ItemStack gunItem,
             @Nullable ResourceLocation gunTexture,
-            int light
+            int light,
+            boolean bloomOnly
     ) {
         if (attachmentItem == null || attachmentItem.isEmpty()) {
             return;
@@ -57,7 +58,11 @@ public class AttachmentRender implements IFunctionalRenderer {
         GlStateManager.pushMatrix();
         GlStateManager.translate(0.0f, -1.5f, 0.0f);
         mc.getTextureManager().bindTexture(registeredTexture);
-        model.render(attachmentItem, gunItem);
+        if (bloomOnly) {
+            model.renderBloom(attachmentItem, gunItem);
+        } else {
+            model.render(attachmentItem, gunItem);
+        }
         model.cleanAnimationTransform();
         model.cleanCameraAnimationTransform();
         GlStateManager.popMatrix();
@@ -73,6 +78,15 @@ public class AttachmentRender implements IFunctionalRenderer {
         if (attachmentItem == null || attachmentItem.isEmpty()) {
             return;
         }
-        renderAttachment(attachmentItem, bedrockGunModel.getCurrentGunItem(), bedrockGunModel.getActiveGunTexture(), light);
+        renderAttachment(attachmentItem, bedrockGunModel.getCurrentGunItem(), bedrockGunModel.getActiveGunTexture(), light, false);
+    }
+
+    @Override
+    public void renderBloom(int light) {
+        ItemStack attachmentItem = bedrockGunModel.getAttachmentItem(type);
+        if (attachmentItem == null || attachmentItem.isEmpty()) {
+            return;
+        }
+        renderAttachment(attachmentItem, bedrockGunModel.getCurrentGunItem(), bedrockGunModel.getActiveGunTexture(), light, true);
     }
 }

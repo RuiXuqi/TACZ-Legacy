@@ -10,4 +10,15 @@ public interface IFunctionalRenderer {
      * @param light packed lightmap coordinates (OpenGlHelper format)
      */
     void render(int light);
+
+    /**
+     * Render only the emissive/bloom contribution for this functional node.
+     * Default is no-op because many functional nodes (hands, muzzle flash, text)
+     * should not participate in the bloom-only pass.
+     *
+     * @param light packed lightmap coordinates (OpenGlHelper format)
+     */
+    default void renderBloom(int light) {
+        // no-op by default
+    }
 }

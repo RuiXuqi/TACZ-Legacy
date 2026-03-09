@@ -1,6 +1,7 @@
 package com.tacz.legacy.client.model;
 
 import com.tacz.legacy.client.model.bedrock.BedrockCube;
+import com.tacz.legacy.client.model.bedrock.BedrockRenderMode;
 import com.tacz.legacy.client.model.bedrock.BedrockPart;
 import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.GlStateManager;
@@ -49,11 +50,17 @@ public class FunctionalBedrockPart extends BedrockPart {
 
     @Override
     public void render() {
+        render(BedrockRenderMode.NORMAL, false);
+    }
+
+    @Override
+    public void render(BedrockRenderMode mode, boolean inheritedIllumination) {
         float prevBX = OpenGlHelper.lastBrightnessX;
         float prevBY = OpenGlHelper.lastBrightnessY;
 
         int cubePackedLight = (int) prevBX | ((int) prevBY << 16);
-        if (illuminated) {
+        boolean subtreeIlluminated = inheritedIllumination || illuminated;
+        if (subtreeIlluminated && !inheritedIllumination) {
             OpenGlHelper.setLightmapTextureCoords(OpenGlHelper.lightmapTexUnit, 240, 240);
             cubePackedLight = 240 | (240 << 16);
         }
@@ -64,24 +71,29 @@ public class FunctionalBedrockPart extends BedrockPart {
         if (functionalRenderer != null) {
             @Nullable IFunctionalRenderer renderer = functionalRenderer.apply(this);
             if (renderer != null) {
-                renderer.render(cubePackedLight);
+                if (mode == BedrockRenderMode.BLOOM) {
+                    renderer.renderBloom(cubePackedLight);
+                } else {
+                    renderer.render(cubePackedLight);
+                }
             } else {
-                renderDefaultContent();
+                renderDefaultContent(mode, subtreeIlluminated);
             }
         } else {
-            renderDefaultContent();
+            renderDefaultContent(mode, subtreeIlluminated);
         }
 
-        if (illuminated) {
+        if (subtreeIlluminated && !inheritedIllumination) {
             OpenGlHelper.setLightmapTextureCoords(OpenGlHelper.lightmapTexUnit, prevBX, prevBY);
         }
 
         GlStateManager.popMatrix();
     }
 
-    private void renderDefaultContent() {
+    private void renderDefaultContent(BedrockRenderMode mode, boolean inheritedIllumination) {
         if (this.visible) {
-            if (!this.cubes.isEmpty()) {
+            boolean renderSelf = mode != BedrockRenderMode.BLOOM || inheritedIllumination;
+            if (renderSelf && !this.cubes.isEmpty()) {
                 Tessellator tessellator = Tessellator.getInstance();
                 BufferBuilder buffer = tessellator.getBuffer();
                 buffer.begin(GL11.GL_QUADS, DefaultVertexFormats.POSITION_TEX_NORMAL);
@@ -91,7 +103,7 @@ public class FunctionalBedrockPart extends BedrockPart {
                 tessellator.draw();
             }
             for (BedrockPart part : this.children) {
-                part.render();
+                part.render(mode, inheritedIllumination);
             }
         }
     }
