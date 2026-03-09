@@ -427,3 +427,32 @@
 - `percent format produces expected output`
 
 **验证**：216/216 单元测试通过，编译成功。
+
+### 2026-03-10 第一人称曳光三明治旋转修复：使用完整 GL 旋转矩阵
+
+**问题**：用户报告第一人称曳光在 45° 倍数角度（0°, 45°, 90°…）表现正常，但在其他任意角度（如 22°, 30°, 60°）出现偏移/漂移。
+
+**根因分析**：
+- 上游 TACZ (1.20) 的实体 PoseStack 仅包含 `pitch + yaw` 旋转——`bobHurt` / `bobView` 被放入投影矩阵（`GameRenderer.java:1116-1118`），不影响实体 PoseStack。
+- Legacy (1.12) 的 GL MODELVIEW 在实体渲染时包含 `hurtCamera + applyBobbing + roll + pitch + yaw` 的完整变换链（`EntityRenderer.java` `setupCameraTransform` → `orientCamera`）。
+- 原 sandwich 代码只撤消 `pitch + yaw`，遗留了 `hurtCamera / bobbing / roll` 的残余旋转。当 muzzle offset 在该残余旋转帧中被应用时，由于残余旋转与角度正弦/余弦的交叉耦合，误差会在非 45° 倍数角度下产生不对称位移（45° 倍数处 sin=cos 或其一为零，误差对称或消失，因而"看起来正常"）。
+- 即使站立不动，`distanceWalkedModified` 达到稳态时仍有极小的 bobbing 残余（GL 矩阵诊断显示 off-diagonal 约 0.002–0.007），足以在大 muzzle offset（Z ≈ -2.1）下产生可见偏移。
+
+**修复**：
+- `RenderKineticBullet.kt` sandwich 从"角度解析 + glRotate 撤消/恢复"改为"读取 GL_MODELVIEW_MATRIX → 提取 3×3 旋转 → 转置得到逆矩阵 → glMultMatrix 撤消/恢复"。这保证无论 GL 中有多少额外旋转（bobbing、hurtCamera、roll），offset 都在正确的坐标系中应用。
+- `logGlMatrixVsSandwich` 诊断方法保留用于调试。
+
+**基础设施**：
+- `build.gradle.kts`：将 `tacz.tracerDebug` 添加到 JVM 属性转发过滤器（原来只有 `tacz.focusedSmoke` / `tacz.audio` 前缀能到达 JVM）。
+- `scripts/runclient_focused_smoke.sh`：新增 `FOCUSED_SMOKE_REGULAR_SHOT_YAW`、`FOCUSED_SMOKE_REGULAR_SHOT_PITCH`、`FOCUSED_SMOKE_REQUIRE_TRACER_FRAME`、`FOCUSED_SMOKE_TRACER_DEBUG` 环境变量支持。
+
+**变更文件**：
+- `src/main/kotlin/.../renderer/entity/RenderKineticBullet.kt`：sandwich 改为矩阵方式 + 新增 3 个 FloatBuffer 字段
+- `build.gradle.kts`：属性过滤器追加 `tacz.tracerDebug`
+- `scripts/runclient_focused_smoke.sh`：新增 4 个环境变量 / Gradle 参数
+
+**验证**：
+- focused smoke yaw=30 pitch=0：PASS，GL_MV_ROTATION 显示 pitchDelta=0 yawDelta=-360（等价模 360）
+- focused smoke yaw=22 pitch=-15：PASS
+- focused smoke yaw=45 pitch=0：PASS
+- 全部单元测试通过
