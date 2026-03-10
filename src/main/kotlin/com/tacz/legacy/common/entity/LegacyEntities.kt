@@ -25,6 +25,8 @@ import net.minecraftforge.fml.common.registry.EntityEntry
 import net.minecraftforge.fml.common.registry.EntityEntryBuilder
 import net.minecraftforge.fml.common.registry.IEntityAdditionalSpawnData
 import net.minecraftforge.fml.common.network.ByteBufUtils
+import net.minecraftforge.fml.relauncher.Side
+import net.minecraftforge.fml.relauncher.SideOnly
 import net.minecraftforge.registries.IForgeRegistry
 import org.joml.Vector3d
 import org.joml.Vector3f
@@ -117,8 +119,8 @@ internal class EntityKineticBullet : EntityThrowable, IEntityAdditionalSpawnData
     internal var ammoId: ResourceLocation = ResourceLocation(TACZLegacy.MOD_ID, "empty")
         private set
     internal var firstPersonRenderOffset: Vector3f? = null
-    internal var firstPersonCameraPitch: Float = 0f
-    internal var firstPersonCameraYaw: Float = 0f
+    internal var firstPersonCameraPitch: Float? = null
+    internal var firstPersonCameraYaw: Float? = null
 
     /** NBT / network deserialization constructor */
     constructor(worldIn: World) : super(worldIn) {
@@ -417,6 +419,21 @@ internal class EntityKineticBullet : EntityThrowable, IEntityAdditionalSpawnData
         if (compound.hasKey("GunDisplayId")) gunDisplayId = ResourceLocation(compound.getString("GunDisplayId"))
         if (compound.hasKey("AmmoId")) ammoId = ResourceLocation(compound.getString("AmmoId"))
         damageModifier = if (compound.hasKey("DamageModifier")) compound.getFloat("DamageModifier") else 1.0f
+    }
+
+    /**
+     * Override to skip rotation sync from server packets.
+     * The server sends byte-compressed (256-step) rotation values every tick,
+     * which contaminate [rotationYaw]/[rotationPitch] precision. Our [onUpdate]
+     * computes precise rotation from motion locally, so we only accept position.
+     */
+    @SideOnly(Side.CLIENT)
+    override fun setPositionAndRotationDirect(
+        x: Double, y: Double, z: Double,
+        yaw: Float, pitch: Float,
+        posRotationIncrements: Int, teleport: Boolean,
+    ) {
+        setPosition(x, y, z)
     }
 
     override fun onUpdate() {

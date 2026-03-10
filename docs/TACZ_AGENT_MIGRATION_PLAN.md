@@ -197,7 +197,17 @@
            2. **~40px Y 偏移是固有透视缩短**：muzzle 在 hand-render 空间深度约 3.6 blocks，tracer tail 在 entity-render 空间深度约 5.5 blocks。同一世界空间 Y 位移在不同深度产生不同屏幕偏移。三组角度测试（yaw=0/pitch=0, yaw=90/pitch=0, yaw=45/pitch=30）均显示 ~40px 恒定 Y 偏移，确认与 camera 角度无关。在正常子弹速度（非 0.1x 慢动作）下，reducer 迅速衰减使该偏移几乎不可见。
            3. **camera angle timing 修正**：上一轮 `FirstPersonRenderGunEvent.kt` 新增了 `cachedMuzzleCameraYaw/Pitch`（hand render 时缓存）作为 sandwich 角度来源，但 hand render 发生在 entity render **之后**——导致首帧 latch 取到的是**上一帧**的 camera 角度。上游使用 `camera.getYRot()` 即**当前帧** entity render 时的 camera 角度。修正为：`entity.firstPersonCameraYaw` 优先使用 `currentCachedCameraYaw`（来自当前帧 CameraSetup 事件），`cachedMuzzleCameraYaw` 仅作 fallback。在固定角度 smoke test 中两者相同，但在交互式旋转摄像机时，此修正消除了帧间 camera 角度差导致的 sandwich 旋转不匹配。
            - 变更文件：`RenderKineticBullet.kt`（camera angle priority swap + `CAMERA_SETUP_YAW_OFFSET` + `normalizeTracerCameraYaw()` + FIRST_PERSON_LATCH log + tracer size/length multiplier）
-           - 验证：`./gradlew classes` 通过；yaw=0、yaw=90、yaw=45/pitch=30 三组 focused smoke 均 PASS，tailScreen 与 MUZZLE_SCREEN 偏差稳定在 ~40px Y / ≤6px X。- **验证状态**：编译与定向测试已覆盖 Client UX / gunsmith / refit backend / render parsing 等阶段性变更；渲染基础设施已有一轮成功的 `runClient` smoke。2026-03-08 最终清理轮已移除此前阻塞 `compileTestKotlin` 的 `LegacyClientShootCoordinatorBurstStateTest`（引用已废弃的 pending-burst API）与 `MathUtilFovTest`（引用已移除的 FOV 函数），以及无法在无头环境运行的 `BedrockGunModelRefitViewPathTest`（`ClassNotFoundException`），同时修复 `TACZAudioRuntimeTest.manifest rejects ogg files with incomplete vorbis headers`（改为使用 channels=0 使 probe 真正拒绝）。
+           - 验证：`./gradlew classes` 通过；yaw=0、yaw=90、yaw=45/pitch=30 三组 focused smoke 均 PASS，tailScreen 与 MUZZLE_SCREEN 偏差稳定在 ~40px Y / ≤6px X。
+         - **第五轮 reopen：非 45° 旋转角度射弹偏轴 / byte-truncated 实体旋转污染收口**：用户反馈"45° 整数倍角度下 tracer 正常，其他角度仍然偏斜"。根因分析：
+           1. **byte-truncated rotation pollution**：1.12 vanilla `SPacketEntityTeleport` / `SPacketEntity.S15PacketEntityRelMove` 以 256-step byte 压缩实体旋转角度，45° × 256/360 = 32（精确整数），而 30° × 256/360 = 21.333（截断为 21，恢复为 29.53°，误差 0.47°）使非 45° 整数倍角度的实体旋转被永久污染。`EntityKineticBullet.onUpdate()` 在客户端每 tick 从 motion 重算精确旋转，但 `EntityTrackerEntry` 每 tick 再次同步一轮 byte-compressed 角度，覆盖了精确值。
+           2. **camera-angle override ordering bug**：`firstPersonCameraYaw/Pitch` 声明为非空 `Float`（默认 `0f`），`!= null` 判定永远为 true；camera-angle override 的 yaw/pitch 计算在 latch block 之前执行，导致首帧读到 `0f` 默认值而非真实 camera 角度，产生 `R_Y(playerYaw) · R_X(playerPitch)` 的残余旋转。
+           - **修正措施**：
+             1. `LegacyEntities.kt`：新增 `setPositionAndRotationDirect` override，仅接受位置更新、丢弃 byte-compressed 旋转，使 `onUpdate()` 的 motion-based 旋转不再被服务端同步覆盖。
+             2. `LegacyEntities.kt`：`firstPersonCameraPitch/Yaw` 改为 `Float?`（nullable），默认 `null`。
+             3. `RenderKineticBullet.kt`：移除 camera-angle override for bullet orientation，改为始终使用 entity interpolated rotation（`prevRotationYaw + delta * pt - 180`, `prevRotationPitch + delta * pt`），与上游 `Axis.YP(lerp(yRotO, yRot) - 180)` / `Axis.XP(lerp(xRotO, xRot))` 完全对齐。Camera angles 仅用于 sandwich offset rotation。
+             4. `RenderKineticBullet.kt`：替换旧的 GL matrix transpose sandwich 为简洁的 `GlStateManager.rotate()` 调用。
+           - 验证：`./gradlew test` 全量通过；yaw=30° pitch=-10° 的 focused smoke 中 `ROTATION_COMPARE` 诊断显示 yawDiff < 0.002°（byte truncation 已消除），tracer `tailScreen ≈ originAfterOffset`（muzzle position 正确）。
+- **验证状态**：编译与定向测试已覆盖 Client UX / gunsmith / refit backend / render parsing 等阶段性变更；渲染基础设施已有一轮成功的 `runClient` smoke。2026-03-08 最终清理轮已移除此前阻塞 `compileTestKotlin` 的 `LegacyClientShootCoordinatorBurstStateTest`（引用已废弃的 pending-burst API）与 `MathUtilFovTest`（引用已移除的 FOV 函数），以及无法在无头环境运行的 `BedrockGunModelRefitViewPathTest`（`ClassNotFoundException`），同时修复 `TACZAudioRuntimeTest.manifest rejects ogg files with incomplete vorbis headers`（改为使用 channels=0 使 probe 真正拒绝）。
    - 2026-03-09 本轮继续修复 4 项 gameplay parity 缺口并新增到 219 tests 全通过：
      1. **fuel/inventory 弹药检查（needCheckAmmo）**：`LivingEntityShoot.kt` 此前硬编码 `needCheckAmmo = true`，导致创造模式下 fuel/inventory reload 类型武器（如 `trisdyna:cms92x`、`trisdyna:ch104`、`applied_armorer:moritz_mg_hmg22`、`tacz:s10dmd`）即使正确触发了客户端射击也会在服务端被 `NO_AMMO` 拦截。现已改为从 `IGunOperator.fromLivingEntity(shooter).needCheckAmmo()` 获取，`consumeAmmoFromPlayer` 在 `!needCheckAmmo` 时直接返回所需量而不消耗背包物品。三把武器的 focused smoke 均 PASS。
      2. **AmmoCountStyle HUD 渲染**：上游 `GunDisplay` POJO 有 `ammo_count_style` 字段（`NORMAL` / `PERCENT`），Legacy 之前完全缺失，始终使用 `DecimalFormat("000")`。现已新增 `AmmoCountStyle.java` 枚举、`GunDisplay.java` + `GunDisplayInstance.java` 字段、`LegacyClientOverlayEventHandler.kt` 按样式渲染（`PERCENT` → `DecimalFormat("000%")`），4 项新测试覆盖。hmg22 的 display JSON 中 `ammo_count_style: "percent"` 现可正确消费。
@@ -207,7 +217,7 @@
 
 因此，下一阶段最值得投入的主线通常不是“继续重迁数据/战斗/Client UX/Render 基础设施主链”，而是：
     1. **Render 剩余子轨**：~~animation state machine~~（已落地）、~~关键帧插值~~（已落地）、bone animation application、ammo/attachment display renderer、~~muzzle flash~~（本轮已落地） / shell ejection、第一人称 hand/scope 渲染链路、~~程序化后坐力 / 射击摆动 / 跳跃摆动~~（本轮已落地）、~~ADS 二阶动力学平滑~~（本轮已落地）、~~约束骨骼逆变换~~（本轮已落地）
-      2. **Combat 剩余 parity 子轨**：~~hurt/kill 事件与客户端同步消息~~、~~边界 fire-mode 状态切换~~、~~needCheckAmmo 真值~~（已修复）、~~burst 服务端调度~~（已补齐 `BurstFireTaskScheduler.tick()` 到 `ServerTickEvent`）、~~脚本武器时间戳基准~~（已修复 `GunAnimationStateContext` 客户端绝对时间戳）、~~AmmoCountStyle HUD~~（已迁移）、~~过热系统散热加速 + 冷却延迟对齐~~（已修复 `tacz$tickHeat` 不再重置 `heatTimestamp`，公式与上游完全一致；`handleShootHeat` 补上 `heatMax` cap；`heatTimestamp` 改为在 `shoot()` 入口统一赋值，脚本路径也覆盖）、~~过热数据客户端-服务端不同步~~（已修复 `tacz$tickHeat` 加 `isRemote` 保护，仅服务端计算冷却，客户端通过 ItemStack NBT 同步获取，与上游 `onTickServerSide` 仅服务端 tick 一致；根因是客户端 `heatTimestamp` 仅在 `draw()` 时设置而不随射击更新，导致客户端冷却量远大于服务端）以及少数未覆盖武器脚本/门禁边角的一致性收尾
+      2. **Combat 剩余 parity 子轨**：~~hurt/kill 事件与客户端同步消息~~、~~边界 fire-mode 状态切换~~、~~needCheckAmmo 真值~~（已修复）、~~burst 服务端调度~~（已补齐 `BurstFireTaskScheduler.tick()` 到 `ServerTickEvent`）、~~脚本武器时间戳基准~~（已修复 `GunAnimationStateContext` 客户端绝对时间戳）、~~AmmoCountStyle HUD~~（已迁移）、~~过热系统散热加速 + 冷却延迟对齐~~（已修复 `tacz$tickHeat` 不再重置 `heatTimestamp`，公式与上游完全一致；`handleShootHeat` 补上 `heatMax` cap；`heatTimestamp` 改为在 `shoot()` 入口统一赋值，脚本路径也覆盖）、~~过热数据客户端-服务端不同步~~（已修复 `tacz$tickHeat` 加 `isRemote` 保护，仅服务端计算冷却，客户端通过 ItemStack NBT 同步获取，与上游 `onTickServerSide` 仅服务端 tick 一致；根因是客户端 `heatTimestamp` 仅在 `draw()` 时设置而不随射击更新，导致客户端冷却量远大于服务端）、~~客户端自动拉拴缺失~~（已补齐 `tickClientAutoBolt()` 到 `LegacyClientPlayerGunBridge.onClientTick()`，与上游 `LocalPlayerBolt.tickAutoBolt()` + `bolt()` 行为一致：每 tick 检测 MANUAL_ACTION 枪膛内无弹 + 有弹药可用时自动触发拉拴、发包、播放动画/音效，并在 `hasBulletInBarrel` 同步到位后清除 `isBolting` 状态；修复了 m700、k30 等手动拉拴武器需要额外点击才能拉拴的问题）以及少数未覆盖武器脚本/门禁边角的一致性收尾
       3. **Client UX / Refit 非阻塞微收尾**：例如 `GunRefitScreen` 的遮罩 / 构图微调、按钮 hover / 贴图的像素级 polish、更多附件副作用的可视反馈补足（opening / 切槽插值 / property diagram 主链已回到生产路径）
       4. **第三方兼容与剩余玩法收尾**：在核心主链已成形的前提下，继续补 JEI / KubeJS / 高级玩法与表现边角
 
@@ -427,32 +437,3 @@
 - `percent format produces expected output`
 
 **验证**：216/216 单元测试通过，编译成功。
-
-### 2026-03-10 第一人称曳光三明治旋转修复：使用完整 GL 旋转矩阵
-
-**问题**：用户报告第一人称曳光在 45° 倍数角度（0°, 45°, 90°…）表现正常，但在其他任意角度（如 22°, 30°, 60°）出现偏移/漂移。
-
-**根因分析**：
-- 上游 TACZ (1.20) 的实体 PoseStack 仅包含 `pitch + yaw` 旋转——`bobHurt` / `bobView` 被放入投影矩阵（`GameRenderer.java:1116-1118`），不影响实体 PoseStack。
-- Legacy (1.12) 的 GL MODELVIEW 在实体渲染时包含 `hurtCamera + applyBobbing + roll + pitch + yaw` 的完整变换链（`EntityRenderer.java` `setupCameraTransform` → `orientCamera`）。
-- 原 sandwich 代码只撤消 `pitch + yaw`，遗留了 `hurtCamera / bobbing / roll` 的残余旋转。当 muzzle offset 在该残余旋转帧中被应用时，由于残余旋转与角度正弦/余弦的交叉耦合，误差会在非 45° 倍数角度下产生不对称位移（45° 倍数处 sin=cos 或其一为零，误差对称或消失，因而"看起来正常"）。
-- 即使站立不动，`distanceWalkedModified` 达到稳态时仍有极小的 bobbing 残余（GL 矩阵诊断显示 off-diagonal 约 0.002–0.007），足以在大 muzzle offset（Z ≈ -2.1）下产生可见偏移。
-
-**修复**：
-- `RenderKineticBullet.kt` sandwich 从"角度解析 + glRotate 撤消/恢复"改为"读取 GL_MODELVIEW_MATRIX → 提取 3×3 旋转 → 转置得到逆矩阵 → glMultMatrix 撤消/恢复"。这保证无论 GL 中有多少额外旋转（bobbing、hurtCamera、roll），offset 都在正确的坐标系中应用。
-- `logGlMatrixVsSandwich` 诊断方法保留用于调试。
-
-**基础设施**：
-- `build.gradle.kts`：将 `tacz.tracerDebug` 添加到 JVM 属性转发过滤器（原来只有 `tacz.focusedSmoke` / `tacz.audio` 前缀能到达 JVM）。
-- `scripts/runclient_focused_smoke.sh`：新增 `FOCUSED_SMOKE_REGULAR_SHOT_YAW`、`FOCUSED_SMOKE_REGULAR_SHOT_PITCH`、`FOCUSED_SMOKE_REQUIRE_TRACER_FRAME`、`FOCUSED_SMOKE_TRACER_DEBUG` 环境变量支持。
-
-**变更文件**：
-- `src/main/kotlin/.../renderer/entity/RenderKineticBullet.kt`：sandwich 改为矩阵方式 + 新增 3 个 FloatBuffer 字段
-- `build.gradle.kts`：属性过滤器追加 `tacz.tracerDebug`
-- `scripts/runclient_focused_smoke.sh`：新增 4 个环境变量 / Gradle 参数
-
-**验证**：
-- focused smoke yaw=30 pitch=0：PASS，GL_MV_ROTATION 显示 pitchDelta=0 yawDelta=-360（等价模 360）
-- focused smoke yaw=22 pitch=-15：PASS
-- focused smoke yaw=45 pitch=0：PASS
-- 全部单元测试通过

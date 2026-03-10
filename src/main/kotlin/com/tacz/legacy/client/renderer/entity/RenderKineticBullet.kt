@@ -60,6 +60,7 @@ internal class RenderKineticBullet(renderManager: RenderManager) : Render<Entity
         private val focusedSmokeTracerFrameLogged = HashSet<Int>()
         private val tracerDebugProjectionLogged = HashSet<Int>()
         private val tracerDebugFirstPersonLatchLogged = HashSet<Int>()
+        private val tracerDebugRotationCompareLogged = HashSet<Int>()
         private val internalModelGson = GsonBuilder()
             .registerTypeAdapter(CubesItem::class.java, CubesItem.Deserializer())
             .create()
@@ -167,8 +168,6 @@ internal class RenderKineticBullet(renderManager: RenderManager) : Render<Entity
             return
         }
 
-        val yaw = entity.prevRotationYaw + (entity.rotationYaw - entity.prevRotationYaw) * partialTicks - 180.0f
-        val pitch = entity.prevRotationPitch + (entity.rotationPitch - entity.prevRotationPitch) * partialTicks
         val width = (0.005f * max(1.0, disToEye / 3.5)).toFloat() * tracerSizeMultiplier
         val rgb = tracerColorText.toRgbColor()
         if (entity.ticksExisted < 5 && disToEye <= 2.0) {
@@ -251,51 +250,43 @@ internal class RenderKineticBullet(renderManager: RenderManager) : Render<Entity
                 val offsetReducer = max(0.0, (50.0 - disToEye)) / 50.0
                 debugOffsetReducer = offsetReducer
                 debugFirstPersonOffset = Vector3f(firstPersonOffset)
-                logGlMatrixVsSandwich(entity)
-                // 1.12: The GL modelview at entity render time includes hurtCamera + bobbing + roll + pitch + yaw.
-                // Upstream 1.20 only has pitch + yaw in the entity PoseStack (bob/hurt go to projection).
-                // We must undo the FULL GL rotation for the offset translation, not just pitch+yaw.
-                // Read the current GL modelview, extract the 3×3 rotation, apply its inverse,
-                // translate by muzzle offset, then re-apply the rotation.
-                sandwichMatrixBuffer.clear()
-                GL11.glGetFloat(GL11.GL_MODELVIEW_MATRIX, sandwichMatrixBuffer)
-                sandwichMatrixBuffer.rewind()
-                // Column-major GL layout: buf[col*4+row]
-                // Build the inverse rotation as a 4×4 identity with transposed upper-left 3×3
-                val invBuf = sandwichInverseBuffer
-                invBuf.clear()
-                for (i in 0 until 16) invBuf.put(0.0f)
-                invBuf.rewind()
-                // Transpose: invBuf[col*4+row] = buf[row*4+col]
-                for (row in 0..2) {
-                    for (col in 0..2) {
-                        invBuf.put(col * 4 + row, sandwichMatrixBuffer.get(row * 4 + col))
-                    }
-                }
-                invBuf.put(15, 1.0f) // w=1
-                // Build the forward rotation (original 3×3 with identity translation)
-                val fwdBuf = sandwichForwardBuffer
-                fwdBuf.clear()
-                for (i in 0 until 16) fwdBuf.put(0.0f)
-                fwdBuf.rewind()
-                for (row in 0..2) {
-                    for (col in 0..2) {
-                        fwdBuf.put(col * 4 + row, sandwichMatrixBuffer.get(col * 4 + row))
-                    }
-                }
-                fwdBuf.put(15, 1.0f) // w=1
-                // Apply: undo rotation → translate → redo rotation
-                invBuf.rewind()
-                GL11.glMultMatrix(invBuf)
+                GlStateManager.rotate(-(entity.firstPersonCameraYaw!! + 180.0f), 0.0f, 1.0f, 0.0f)
+                GlStateManager.rotate(-entity.firstPersonCameraPitch!!, 1.0f, 0.0f, 0.0f)
                 GlStateManager.translate(
                     firstPersonOffset.x * offsetReducer.toFloat(),
                     firstPersonOffset.y * offsetReducer.toFloat(),
                     firstPersonOffset.z * offsetReducer.toFloat(),
                 )
-                fwdBuf.rewind()
-                GL11.glMultMatrix(fwdBuf)
+                GlStateManager.rotate(entity.firstPersonCameraPitch!!, 1.0f, 0.0f, 0.0f)
+                GlStateManager.rotate(entity.firstPersonCameraYaw!! + 180.0f, 0.0f, 1.0f, 0.0f)
                 debugOriginAfterOffset = projectCurrentPoint(0.0f, 0.0f, 0.0f)
             }
+        }
+        // Bullet orientation uses entity rotation (matching upstream TACZ convention).
+        // Upstream: Axis.YP(lerp(yRotO, yRot) - 180), Axis.XP(lerp(xRotO, xRot))
+        // The sandwich applies camera angles; bullet orientation uses entity rotation.
+        // setPositionAndRotationDirect is overridden to prevent byte-truncated rotation
+        // from server sync, so entity rotation tracks bullet motion direction precisely.
+        val yaw = entity.prevRotationYaw + (entity.rotationYaw - entity.prevRotationYaw) * partialTicks - 180.0f
+        val pitch = entity.prevRotationPitch + (entity.rotationPitch - entity.prevRotationPitch) * partialTicks
+        if (tracerDebugEnabled && tracerDebugRotationCompareLogged.add(entity.entityId)) {
+            val hDist = sqrt(entity.motionX * entity.motionX + entity.motionZ * entity.motionZ)
+            val expectedYaw = Math.toDegrees(Math.atan2(entity.motionX, entity.motionZ)).toFloat()
+            val expectedPitch = Math.toDegrees(Math.atan2(entity.motionY, hDist)).toFloat()
+            TACZLegacy.logger.info(
+                "[TracerDebug] ROTATION_COMPARE entityId={} entityYaw={} entityPitch={} expectedYaw={} expectedPitch={} yawDiff={} pitchDiff={} usedYaw={} usedPitch={} latchedCamYaw={} latchedCamPitch={}",
+                entity.entityId,
+                "%.4f".format(entity.rotationYaw),
+                "%.4f".format(entity.rotationPitch),
+                "%.4f".format(expectedYaw),
+                "%.4f".format(expectedPitch),
+                "%.6f".format(entity.rotationYaw - expectedYaw),
+                "%.6f".format(entity.rotationPitch - expectedPitch),
+                "%.4f".format(yaw),
+                "%.4f".format(pitch),
+                "%.4f".format(entity.firstPersonCameraYaw ?: Float.NaN),
+                "%.4f".format(entity.firstPersonCameraPitch ?: Float.NaN),
+            )
         }
         GlStateManager.rotate(yaw, 0.0f, 1.0f, 0.0f)
         GlStateManager.rotate(pitch, 1.0f, 0.0f, 0.0f)
@@ -382,8 +373,8 @@ internal class RenderKineticBullet(renderManager: RenderManager) : Render<Entity
             center,
             tail,
             head,
-            "%.4f".format(entity.firstPersonCameraYaw),
-            "%.4f".format(entity.firstPersonCameraPitch),
+            "%.4f".format(entity.firstPersonCameraYaw ?: Float.NaN),
+            "%.4f".format(entity.firstPersonCameraPitch ?: Float.NaN),
         )
     }
 
@@ -532,104 +523,4 @@ internal class RenderKineticBullet(renderManager: RenderManager) : Render<Entity
     }
 
     private fun normalizeTracerCameraYaw(cameraYaw: Float?): Float? = cameraYaw?.minus(CAMERA_SETUP_YAW_OFFSET)
-
-    /**
-     * Diagnostic: extract the GL MODELVIEW matrix at the point just before the sandwich and
-     * decompose the upper-left 3×3 to recover the yaw/pitch that orientCamera wrote. Compare
-     * with the sandwich angles so we can see if there is a mismatch (e.g. from applyBobbing
-     * or hurtCameraEffect contributing extra rotation in 1.12 that doesn't exist upstream).
-     */
-    private val glMatrixDebugLogged = LinkedHashMap<Int, Boolean>()
-    private val glMatrixDebugBuffer: FloatBuffer = BufferUtils.createFloatBuffer(16)
-    private val sandwichMatrixBuffer: FloatBuffer = BufferUtils.createFloatBuffer(16)
-    private val sandwichInverseBuffer: FloatBuffer = BufferUtils.createFloatBuffer(16)
-    private val sandwichForwardBuffer: FloatBuffer = BufferUtils.createFloatBuffer(16)
-
-    private fun logGlMatrixVsSandwich(entity: EntityKineticBullet) {
-        if (!tracerDebugEnabled) return
-        if (glMatrixDebugLogged.containsKey(entity.entityId)) return
-        glMatrixDebugLogged[entity.entityId] = true
-        // Limit cache size
-        if (glMatrixDebugLogged.size > 100) {
-            val iter = glMatrixDebugLogged.iterator()
-            iter.next(); iter.remove()
-        }
-
-        glMatrixDebugBuffer.clear()
-        GL11.glGetFloat(GL11.GL_MODELVIEW_MATRIX, glMatrixDebugBuffer)
-        glMatrixDebugBuffer.rewind()
-
-        // Column-major: m[col*4+row]
-        val m = FloatArray(16)
-        for (i in 0 until 16) m[i] = glMatrixDebugBuffer.get(i)
-
-        // The upper-left 3×3 = R*S where S includes any scale (we expect scale=1)
-        // For orientCamera: R = Rz(roll) * Rx(pitch) * Ry(yaw)  (yaw = playerYaw+180+animDelta)
-        //   m00 = cos(yaw)*cos(roll)-sin(yaw)*sin(pitch)*sin(roll)
-        //   m01 = cos(pitch)*sin(roll)
-        //   m10 = ...
-        // Simple extraction assuming roll≈0:
-        //   m01 ≈ sin(pitch)*sin(roll)... hmm, let's just use atan2 approach
-        //
-        // For Ry(yaw) * Rx(pitch) (the GL applies rotate(pitch,X) * rotate(yaw,Y) but
-        // glRotate post-multiplies, so the matrix = ... * Ry(yaw) * Rx(pitch)):
-        //   Assuming no roll, hurtCamera, bobbing:
-        //   MV_rotation = Rx(pitch) * Ry(yaw)   <-- note: GL applies in reverse order of call
-        //
-        // Actually: setupCameraTransform does loadIdentity → hurtCamera → applyBobbing → orientCamera.
-        // orientCamera does: rotate(roll,Z) → rotate(pitch,X) → rotate(yaw,Y).
-        // Each glRotate post-multiplies: MV = MV * R.
-        // So: MV = I * Rhurt * Rbob * Rz(roll) * Rx(pitch) * Ry(yaw)  (then translate(-eyeHeight))
-        // Then doRender adds: MV = MV * T(entityRel)  (translate is also post-multiply)
-        //
-        // The upper-left 3×3 of MV (ignoring translation) = Rhurt * Rbob * Rz(roll) * Rx(pitch) * Ry(yaw).
-        // If hurt=I, bob=I, roll=0: rotation = Rx(pitch) * Ry(yaw).
-        //
-        // For Rx(p) * Ry(y):
-        //   [  cos(y)       0      sin(y)  ]
-        //   [  sin(p)*sin(y) cos(p) -sin(p)*cos(y) ]
-        //   [ -cos(p)*sin(y) sin(p)  cos(p)*cos(y) ]
-        //
-        // yaw = atan2(m[0*4+2], m[0*4+0]) = atan2(sin(y), cos(y))  -- from row 0
-        //     = atan2(m[8], m[0])
-        // pitch = atan2(m[2*4+1], m[1*4+1]) = atan2(sin(p), cos(p))  -- from col 1
-        //       = atan2(m[9], m[5])
-
-        // Column-major indexing: m[col*4+row]
-        // m[0]  = m00 (col0 row0) = cos(y)
-        // m[1]  = m10 (col0 row1) = sin(p)*sin(y)
-        // m[2]  = m20 (col0 row2) = -cos(p)*sin(y)
-        // m[4]  = m01 (col1 row0) = 0
-        // m[5]  = m11 (col1 row1) = cos(p)
-        // m[6]  = m21 (col1 row2) = sin(p)
-        // m[8]  = m02 (col2 row0) = sin(y)
-        // m[9]  = m12 (col2 row1) = -sin(p)*cos(y)
-        // m[10] = m22 (col2 row2) = cos(p)*cos(y)
-
-        val extractedYawRad = Math.atan2(m[8].toDouble(), m[0].toDouble())
-        val extractedPitchRad = Math.atan2(m[6].toDouble(), m[5].toDouble())
-        val extractedYawDeg = Math.toDegrees(extractedYawRad).toFloat()
-        val extractedPitchDeg = Math.toDegrees(extractedPitchRad).toFloat()
-
-        val sandwichYaw = entity.firstPersonCameraYaw + 180.0f
-        val sandwichPitch = entity.firstPersonCameraPitch
-
-        val yawDelta = extractedYawDeg - sandwichYaw
-        val pitchDelta = extractedPitchDeg - sandwichPitch
-
-        TACZLegacy.logger.info(
-            "[TracerDebug] GL_MV_ROTATION entityId={} extractedYaw={} extractedPitch={} sandwichYaw={} sandwichPitch={} yawDelta={} pitchDelta={} m00={} m01={} m02={} m10={} m11={} m12={} m20={} m21={} m22={} m30={} m31={} m32={}",
-            entity.entityId,
-            "%.4f".format(extractedYawDeg),
-            "%.4f".format(extractedPitchDeg),
-            "%.4f".format(sandwichYaw),
-            "%.4f".format(sandwichPitch),
-            "%.4f".format(yawDelta),
-            "%.4f".format(pitchDelta),
-            "%.4f".format(m[0]), "%.4f".format(m[4]), "%.4f".format(m[8]),
-            "%.4f".format(m[1]), "%.4f".format(m[5]), "%.4f".format(m[9]),
-            "%.4f".format(m[2]), "%.4f".format(m[6]), "%.4f".format(m[10]),
-            "%.4f".format(m[12]), "%.4f".format(m[13]), "%.4f".format(m[14]),
-        )
-    }
 }
