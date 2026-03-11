@@ -1,3 +1,5 @@
+import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
+import com.gtnewhorizons.retrofuturagradle.mcp.ReobfuscatedJar
 import org.jetbrains.gradle.ext.Gradle
 import org.jetbrains.gradle.ext.compiler
 import org.jetbrains.gradle.ext.runConfigurations
@@ -19,6 +21,7 @@ plugins {
     id("java-library")
     id("jacoco")
     kotlin("jvm") version libs.versions.kotlinVersion
+    id("com.github.johnrengelman.shadow") version "8.1.1"
     id("maven-publish")
     id("org.jetbrains.gradle.plugin.idea-ext") version "1.1.7"
     id("eclipse")
@@ -88,11 +91,10 @@ tasks.named<JavaCompile>("compileTestJava") {
     classpath += files(compileTestKotlinTask.flatMap { it.destinationDirectory })
 }
 
-configurations {
-    val embed = create("embed")
-    implementation.configure {
-        extendsFrom(embed)
-    }
+val shade by configurations.creating
+
+configurations.named("implementation") {
+    extendsFrom(shade)
 }
 
 minecraft {
@@ -129,6 +131,10 @@ minecraft {
 
     // Include and use dependencies' Access Transformer files
     useDependencyAccessTransformers.set(true)
+
+    // These libraries are shaded into the production jar, so obfuscated runtime
+    // launches should not also add external copies to the classpath.
+    groupsToExcludeFromAutoReobfMapping.addAll("org.luaj", "org.joml", "org.apache.commons")
 
     // Add any properties you want to swap out for a dynamic value at build time here
     // Any properties here will be added to a class at build time, the name can be configured below
@@ -167,9 +173,9 @@ dependencies {
     implementation("io.github.chaosunity.forgelin:Forgelin-Continuous:${forgelin_continuous_version}") {
         exclude("net.minecraftforge")
     }
-    implementation("org.luaj:luaj-jse:3.0.1")
-    implementation("org.joml:joml:1.10.5")
-    implementation("org.apache.commons:commons-math3:3.6.1")
+    shade("org.luaj:luaj-jse:3.0.1")
+    shade("org.joml:joml:1.10.5")
+    shade("org.apache.commons:commons-math3:3.6.1")
 
     // Bloom effect and depends
     implementation(rfg.deobf("curse.maven:lumenized-1234162:6734060"))
@@ -249,12 +255,23 @@ tasks.withType<Jar> {
         }
         attributes(attributeMap)
     }
-    // Add all embedded dependencies into the jar
-    from(provider {
-        configurations.getByName("embed").map {
-            if (it.isDirectory()) it else zipTree(it)
-        }
-    })
+}
+
+val shadowJarTask = tasks.named<ShadowJar>("shadowJar") {
+    archiveClassifier.set("shadow-dev")
+    configurations = listOf(shade)
+
+    relocate("org.luaj", "${maven_group}.shadow.org.luaj")
+    relocate("org.joml", "${maven_group}.shadow.org.joml")
+    relocate("org.apache.commons.math3", "${maven_group}.shadow.org.apache.commons.math3")
+
+    mergeServiceFiles()
+    exclude("META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA", "META-INF/INDEX.LIST")
+}
+
+tasks.named<ReobfuscatedJar>("reobfJar") {
+    dependsOn(shadowJarTask)
+    inputJar.set(shadowJarTask.flatMap { it.archiveFile })
 }
 
 idea {

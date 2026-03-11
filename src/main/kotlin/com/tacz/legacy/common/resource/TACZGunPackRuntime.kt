@@ -286,8 +286,23 @@ internal object TACZGunPackRuntimeRegistry {
     internal fun reload(gameDirectory: File): TACZRuntimeSnapshot {
         val packsRoot = File(gameDirectory, TACZLegacy.MOD_ID).apply { mkdirs() }
         TACZDataScriptManager.reload()
-        val loaded = TACZGunPackScanner.scan(packsRoot)
+        val previousSnapshot = snapshot
+        val loaded = try {
+            TACZGunPackScanner.scan(packsRoot)
+        } catch (throwable: Throwable) {
+            val issue = "Gun pack reload failed; keeping previous runtime snapshot (${throwable.message ?: throwable.javaClass.simpleName})."
+            TACZLegacy.logger.error("[GunPackRuntime] {}", issue, throwable)
+            val fallbackSnapshot = previousSnapshot.copy(issues = previousSnapshot.issues + issue)
+            snapshot = fallbackSnapshot
+            logSnapshotSummary(fallbackSnapshot)
+            return fallbackSnapshot
+        }
         snapshot = loaded
+        logSnapshotSummary(loaded)
+        return loaded
+    }
+
+    private fun logSnapshotSummary(loaded: TACZRuntimeSnapshot): Unit {
         TACZLegacy.logger.info(
             "[GunPackRuntime] Loaded {} pack(s), {} gun(s), {} attachment(s), {} ammo index(es), {} block index(es).",
             loaded.packs.size,
@@ -299,7 +314,6 @@ internal object TACZGunPackRuntimeRegistry {
         if (loaded.issues.isNotEmpty()) {
             loaded.issues.forEach { issue -> TACZLegacy.logger.warn("[GunPackRuntime] {}", issue) }
         }
-        return loaded
     }
 
     internal fun getSnapshot(): TACZRuntimeSnapshot = snapshot
@@ -355,62 +369,29 @@ internal object TACZGunPackScanner {
 
         val entries = packsRoot.listFiles()?.sortedBy { it.name.lowercase(Locale.ROOT) }.orEmpty()
         entries.forEach { candidate ->
-            when {
-                candidate.isDirectory -> TACZDirectoryPackSource(candidate).use { source ->
-                    loadPack(
-                        source = source,
-                        candidate = candidate,
-                        rawPacks = rawPacks,
-                        rawPackInfos = rawPackInfos,
-                        rawGunIndices = rawGunIndices,
-                        rawGunData = rawGunData,
-                        rawAttachmentIndices = rawAttachmentIndices,
-                        rawAttachmentData = rawAttachmentData,
-                        rawAmmoIndices = rawAmmoIndices,
-                        rawBlockIndices = rawBlockIndices,
-                        rawBlockData = rawBlockData,
-                        rawRecipes = rawRecipes,
-                        rawRecipeFilters = rawRecipeFilters,
-                        rawAttachmentTags = rawAttachmentTags,
-                        rawAllowAttachmentTags = rawAllowAttachmentTags,
-                        rawGunDisplays = rawGunDisplays,
-                        rawAmmoDisplays = rawAmmoDisplays,
-                        rawAttachmentDisplays = rawAttachmentDisplays,
-                        rawBlockDisplays = rawBlockDisplays,
-                        rawTranslations = rawTranslations,
-                        rawDataScripts = rawDataScripts,
-                        issues = issues,
-                    )
-                }
-                candidate.isFile && candidate.name.lowercase(Locale.ROOT).endsWith(".zip") -> ZipFile(candidate).use { zipFile ->
-                    TACZZipPackSource(candidate, zipFile).use { source ->
-                        loadPack(
-                            source = source,
-                            candidate = candidate,
-                            rawPacks = rawPacks,
-                            rawPackInfos = rawPackInfos,
-                            rawGunIndices = rawGunIndices,
-                            rawGunData = rawGunData,
-                            rawAttachmentIndices = rawAttachmentIndices,
-                            rawAttachmentData = rawAttachmentData,
-                            rawAmmoIndices = rawAmmoIndices,
-                            rawBlockIndices = rawBlockIndices,
-                            rawBlockData = rawBlockData,
-                            rawRecipes = rawRecipes,
-                            rawRecipeFilters = rawRecipeFilters,
-                            rawAttachmentTags = rawAttachmentTags,
-                            rawAllowAttachmentTags = rawAllowAttachmentTags,
-                            rawGunDisplays = rawGunDisplays,
-                            rawAmmoDisplays = rawAmmoDisplays,
-                            rawAttachmentDisplays = rawAttachmentDisplays,
-                            rawBlockDisplays = rawBlockDisplays,
-                            rawTranslations = rawTranslations,
-                            rawDataScripts = rawDataScripts,
-                            issues = issues,
-                        )
-                    }
-                }
-            }
+            scanCandidate(
+                candidate = candidate,
+                rawPacks = rawPacks,
+                rawPackInfos = rawPackInfos,
+                rawGunIndices = rawGunIndices,
+                rawGunData = rawGunData,
+                rawAttachmentIndices = rawAttachmentIndices,
+                rawAttachmentData = rawAttachmentData,
+                rawAmmoIndices = rawAmmoIndices,
+                rawBlockIndices = rawBlockIndices,
+                rawBlockData = rawBlockData,
+                rawRecipes = rawRecipes,
+                rawRecipeFilters = rawRecipeFilters,
+                rawAttachmentTags = rawAttachmentTags,
+                rawAllowAttachmentTags = rawAllowAttachmentTags,
+                rawGunDisplays = rawGunDisplays,
+                rawAmmoDisplays = rawAmmoDisplays,
+                rawAttachmentDisplays = rawAttachmentDisplays,
+                rawBlockDisplays = rawBlockDisplays,
+                rawTranslations = rawTranslations,
+                rawDataScripts = rawDataScripts,
+                issues = issues,
+            )
         }
 
         val guns = LinkedHashMap<ResourceLocation, TACZLoadedGun>()
@@ -479,6 +460,95 @@ internal object TACZGunPackScanner {
             translations = rawTranslations.mapValues { (_, values) -> values.toMap() },
             issues = issues.toList(),
         )
+    }
+
+    private fun scanCandidate(
+        candidate: File,
+        rawPacks: MutableMap<String, TACZLoadedPack>,
+        rawPackInfos: MutableMap<String, TACZPackInfo>,
+        rawGunIndices: MutableMap<ResourceLocation, TACZGunIndexDefinition>,
+        rawGunData: MutableMap<ResourceLocation, TACZGunDataDefinition>,
+        rawAttachmentIndices: MutableMap<ResourceLocation, TACZAttachmentIndexDefinition>,
+        rawAttachmentData: MutableMap<ResourceLocation, TACZAttachmentDataDefinition>,
+        rawAmmoIndices: MutableMap<ResourceLocation, TACZAmmoIndexDefinition>,
+        rawBlockIndices: MutableMap<ResourceLocation, TACZBlockIndexDefinition>,
+        rawBlockData: MutableMap<ResourceLocation, TACZBlockDataDefinition>,
+        rawRecipes: MutableMap<ResourceLocation, TACZRecipeDefinition>,
+        rawRecipeFilters: MutableMap<ResourceLocation, TACZRecipeFilterDefinition>,
+        rawAttachmentTags: MutableMap<ResourceLocation, LinkedHashSet<String>>,
+        rawAllowAttachmentTags: MutableMap<ResourceLocation, LinkedHashSet<String>>,
+        rawGunDisplays: MutableMap<ResourceLocation, TACZDisplayDefinition>,
+        rawAmmoDisplays: MutableMap<ResourceLocation, TACZDisplayDefinition>,
+        rawAttachmentDisplays: MutableMap<ResourceLocation, TACZDisplayDefinition>,
+        rawBlockDisplays: MutableMap<ResourceLocation, TACZDisplayDefinition>,
+        rawTranslations: MutableMap<String, LinkedHashMap<String, String>>,
+        rawDataScripts: MutableMap<ResourceLocation, String>,
+        issues: MutableList<String>,
+    ): Unit {
+        if (!candidate.isDirectory && !(candidate.isFile && candidate.name.lowercase(Locale.ROOT).endsWith(".zip"))) {
+            return
+        }
+        runCatching {
+            when {
+                candidate.isDirectory -> TACZDirectoryPackSource(candidate).use { source ->
+                    loadPack(
+                        source = source,
+                        candidate = candidate,
+                        rawPacks = rawPacks,
+                        rawPackInfos = rawPackInfos,
+                        rawGunIndices = rawGunIndices,
+                        rawGunData = rawGunData,
+                        rawAttachmentIndices = rawAttachmentIndices,
+                        rawAttachmentData = rawAttachmentData,
+                        rawAmmoIndices = rawAmmoIndices,
+                        rawBlockIndices = rawBlockIndices,
+                        rawBlockData = rawBlockData,
+                        rawRecipes = rawRecipes,
+                        rawRecipeFilters = rawRecipeFilters,
+                        rawAttachmentTags = rawAttachmentTags,
+                        rawAllowAttachmentTags = rawAllowAttachmentTags,
+                        rawGunDisplays = rawGunDisplays,
+                        rawAmmoDisplays = rawAmmoDisplays,
+                        rawAttachmentDisplays = rawAttachmentDisplays,
+                        rawBlockDisplays = rawBlockDisplays,
+                        rawTranslations = rawTranslations,
+                        rawDataScripts = rawDataScripts,
+                        issues = issues,
+                    )
+                }
+                else -> ZipFile(candidate).use { zipFile ->
+                    TACZZipPackSource(candidate, zipFile).use { source ->
+                        loadPack(
+                            source = source,
+                            candidate = candidate,
+                            rawPacks = rawPacks,
+                            rawPackInfos = rawPackInfos,
+                            rawGunIndices = rawGunIndices,
+                            rawGunData = rawGunData,
+                            rawAttachmentIndices = rawAttachmentIndices,
+                            rawAttachmentData = rawAttachmentData,
+                            rawAmmoIndices = rawAmmoIndices,
+                            rawBlockIndices = rawBlockIndices,
+                            rawBlockData = rawBlockData,
+                            rawRecipes = rawRecipes,
+                            rawRecipeFilters = rawRecipeFilters,
+                            rawAttachmentTags = rawAttachmentTags,
+                            rawAllowAttachmentTags = rawAllowAttachmentTags,
+                            rawGunDisplays = rawGunDisplays,
+                            rawAmmoDisplays = rawAmmoDisplays,
+                            rawAttachmentDisplays = rawAttachmentDisplays,
+                            rawBlockDisplays = rawBlockDisplays,
+                            rawTranslations = rawTranslations,
+                            rawDataScripts = rawDataScripts,
+                            issues = issues,
+                        )
+                    }
+                }
+            }
+        }.onFailure { throwable ->
+            TACZLegacy.logger.warn("[GunPackRuntime] Skipping pack {} due to load failure.", candidate.name, throwable)
+            issues += "Pack ${candidate.name} skipped because it could not be read safely (${throwable.message ?: throwable.javaClass.simpleName})."
+        }
     }
 
     private fun loadPack(
@@ -925,11 +995,19 @@ private class TACZZipPackSource(
     private val file: File,
     private val zipFile: ZipFile,
 ) : TACZPackSource {
-    override fun listEntries(): Sequence<String> = Collections.list(zipFile.entries()).map { it.name }.sorted().asSequence()
+    override fun listEntries(): Sequence<String> = try {
+        Collections.list(zipFile.entries()).map { it.name }.sorted().asSequence()
+    } catch (exception: IllegalArgumentException) {
+        throw IllegalStateException("Failed to enumerate zip entries for ${file.name}", exception)
+    }
 
     override fun readText(path: String): String? {
-        val entry = zipFile.getEntry(path) ?: return null
-        return zipFile.getInputStream(entry).bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
+        try {
+            val entry = zipFile.getEntry(path) ?: return null
+            return zipFile.getInputStream(entry).bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
+        } catch (exception: IllegalArgumentException) {
+            throw IllegalStateException("Failed to read zip entry $path from ${file.name}", exception)
+        }
     }
 }
 

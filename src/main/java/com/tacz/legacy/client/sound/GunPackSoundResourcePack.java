@@ -2,6 +2,7 @@ package com.tacz.legacy.client.sound;
 
 import com.tacz.legacy.TACZLegacy;
 import com.tacz.legacy.client.resource.TACZClientAssetManager;
+import com.tacz.legacy.mixin.minecraft.client.MinecraftInvoker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.resources.IResourcePack;
 import net.minecraft.client.resources.data.IMetadataSection;
@@ -15,7 +16,6 @@ import java.awt.image.BufferedImage;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
-import java.lang.reflect.Field;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -27,16 +27,6 @@ import java.util.Set;
 @SideOnly(Side.CLIENT)
 public final class GunPackSoundResourcePack implements IResourcePack {
     private static final GunPackSoundResourcePack INSTANCE = new GunPackSoundResourcePack();
-    private static final Field DEFAULT_RESOURCE_PACKS_FIELD;
-
-    static {
-        try {
-            DEFAULT_RESOURCE_PACKS_FIELD = Minecraft.class.getDeclaredField("defaultResourcePacks");
-            DEFAULT_RESOURCE_PACKS_FIELD.setAccessible(true);
-        } catch (NoSuchFieldException e) {
-            throw new IllegalStateException("Unable to access Minecraft.defaultResourcePacks", e);
-        }
-    }
 
     private volatile Set<String> resourceDomains = Collections.emptySet();
 
@@ -80,26 +70,25 @@ public final class GunPackSoundResourcePack implements IResourcePack {
 
     @SuppressWarnings("unchecked")
     private static boolean ensureInstalled(Minecraft minecraft) {
-        try {
-            List<IResourcePack> defaultResourcePacks = (List<IResourcePack>) DEFAULT_RESOURCE_PACKS_FIELD.get(minecraft);
-            if (defaultResourcePacks.contains(INSTANCE)) {
-                return false;
-            }
-            defaultResourcePacks.add(INSTANCE);
-            return true;
-        } catch (IllegalAccessException e) {
-            throw new IllegalStateException("Unable to install gun pack sound resource pack", e);
+        List<IResourcePack> defaultResourcePacks = getDefaultResourcePacks(minecraft);
+        if (defaultResourcePacks.contains(INSTANCE)) {
+            return false;
         }
+        defaultResourcePacks.add(INSTANCE);
+        return true;
     }
 
     @SuppressWarnings("unchecked")
     private static boolean removeInstalled(Minecraft minecraft) {
-        try {
-            List<IResourcePack> defaultResourcePacks = (List<IResourcePack>) DEFAULT_RESOURCE_PACKS_FIELD.get(minecraft);
-            return defaultResourcePacks.remove(INSTANCE);
-        } catch (IllegalAccessException e) {
-            throw new IllegalStateException("Unable to remove gun pack sound resource pack", e);
+        return getDefaultResourcePacks(minecraft).remove(INSTANCE);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<IResourcePack> getDefaultResourcePacks(Minecraft minecraft) {
+        if (!(minecraft instanceof MinecraftInvoker)) {
+            throw new IllegalStateException("MinecraftInvoker mixin not applied; unable to access default resource packs safely");
         }
+        return ((MinecraftInvoker) minecraft).tacz$getDefaultResourcePacks();
     }
 
     private ResourceLocation redirectSoundPath(ResourceLocation location) {

@@ -15,6 +15,7 @@ import com.tacz.legacy.client.gameplay.LegacyClientGunAnimationDriver
 import com.tacz.legacy.client.gameplay.LegacyClientShootCoordinator
 import com.tacz.legacy.client.model.BedrockGunModel
 import com.tacz.legacy.client.resource.TACZClientAssetManager
+import com.tacz.legacy.mixin.minecraft.client.MinecraftInvoker
 import com.tacz.legacy.common.application.refit.LegacyGunRefitRuntime
 import com.tacz.legacy.common.foundation.FocusedSmokePlanner
 import com.tacz.legacy.common.foundation.FocusedSmokeRuntime
@@ -47,8 +48,6 @@ import net.minecraftforge.fml.common.network.simpleimpl.MessageContext
 import net.minecraftforge.fml.common.gameevent.TickEvent
 import net.minecraftforge.fml.relauncher.Side
 import org.lwjgl.opengl.Display
-import java.lang.reflect.Field
-import java.lang.reflect.Method
 import kotlin.math.abs
 import kotlin.math.max
 
@@ -109,30 +108,6 @@ internal object FocusedSmokeClientHooks {
     private var reloadStartedAtMs: Long = 0L
     private var expectedReloadDurationMs: Long = 0L
     private var reloadGunId: String? = null
-
-    private val clickMouseMethod: Method? by lazy {
-        runCatching {
-            Minecraft::class.java.getDeclaredMethod("clickMouse").apply {
-                isAccessible = true
-            }
-        }.getOrNull()
-    }
-
-    private val sendClickBlockToControllerMethod: Method? by lazy {
-        runCatching {
-            Minecraft::class.java.getDeclaredMethod("sendClickBlockToController", Boolean::class.javaPrimitiveType).apply {
-                isAccessible = true
-            }
-        }.getOrNull()
-    }
-
-    private val leftClickCounterField: Field? by lazy {
-        runCatching {
-            Minecraft::class.java.getDeclaredField("leftClickCounter").apply {
-                isAccessible = true
-            }
-        }.getOrNull()
-    }
 
     @SubscribeEvent
     fun onClientTick(event: TickEvent.ClientTickEvent) {
@@ -345,10 +320,8 @@ internal object FocusedSmokeClientHooks {
         }
         val probeState = player.world.getBlockState(probePos)
 
-        val clickMethod = clickMouseMethod
-        val blockMethod = sendClickBlockToControllerMethod
-        val counterField = leftClickCounterField
-        if (clickMethod == null || blockMethod == null || counterField == null) {
+        val minecraftInvoker = mc as? MinecraftInvoker
+        if (minecraftInvoker == null) {
             if (insertedTemporaryBlock) {
                 player.world.setBlockState(probePos, originalState)
             }
@@ -359,18 +332,18 @@ internal object FocusedSmokeClientHooks {
 
         val originalHit = mc.objectMouseOver
         val originalSwing = player.isSwingInProgress
-        val originalLeftClickCounter = counterField.getInt(mc)
+        val originalLeftClickCounter = minecraftInvoker.`tacz$getLeftClickCounter`()
 
         mc.objectMouseOver = RayTraceResult(Vec3d(probePos).add(0.5, 0.5, 0.5), EnumFacing.UP, probePos)
-        counterField.setInt(mc, 0)
+        minecraftInvoker.`tacz$setLeftClickCounter`(0)
 
         val invokeSucceeded = runCatching {
-            clickMethod.invoke(mc)
-            blockMethod.invoke(mc, true)
+            minecraftInvoker.`tacz$invokeClickMouse`()
+            minecraftInvoker.`tacz$invokeSendClickBlockToController`(true)
         }.isSuccess
 
         mc.objectMouseOver = originalHit
-        counterField.setInt(mc, originalLeftClickCounter)
+        minecraftInvoker.`tacz$setLeftClickCounter`(originalLeftClickCounter)
         mc.playerController?.resetBlockRemoving()
 
         val stateAfter = player.world.getBlockState(probePos)

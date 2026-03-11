@@ -75,6 +75,27 @@ class TACZGunPackRuntimeTest {
         }
     }
 
+    @Test
+    fun `scanner skips malformed zip pack and keeps valid packs loaded`() {
+        val gameDir = Files.createTempDirectory("tacz-runtime-malformed-zip").toFile()
+        try {
+            TACZGunPackRuntimeRegistry.clearForTests()
+            val packDirectory = File(gameDir, "tacz").apply { mkdirs() }
+            createDemoPackZip(File(packDirectory, "demo_pack.zip"))
+            createMalformedPackZip(File(packDirectory, "broken_pack.zip"))
+
+            val snapshot = TACZGunPackRuntimeRegistry.reload(gameDir)
+
+            assertEquals(1, snapshot.packs.size)
+            assertTrue(snapshot.packInfos.containsKey("demo"))
+            assertTrue(snapshot.guns.containsKey(ResourceLocation("demo", "test_rifle")))
+            assertTrue(snapshot.issues.any { it.contains("broken_pack.zip") })
+        } finally {
+            TACZGunPackRuntimeRegistry.clearForTests()
+            gameDir.deleteRecursively()
+        }
+    }
+
     private fun createDemoPackZip(target: File): Unit {
         FileOutputStream(target).use { output ->
             ZipOutputStream(output).use { zip ->
@@ -190,6 +211,66 @@ class TACZGunPackRuntimeTest {
                 """.trimIndent())
             }
         }
+    }
+
+    private fun createMalformedPackZip(target: File): Unit {
+        val poisonedEntryName = "assets/broken/malformed_entry_payload.txt"
+        FileOutputStream(target).use { output ->
+            ZipOutputStream(output).use { zip ->
+                writeEntry(zip, "gunpack.meta.json", """
+                    {
+                      "namespace": "broken"
+                    }
+                """.trimIndent())
+                writeEntry(zip, "assets/broken/gunpack_info.json", """
+                    {
+                      "version": "1.0.0",
+                      "name": "pack.broken.name"
+                    }
+                """.trimIndent())
+                writeEntry(zip, poisonedEntryName, "this entry name will be corrupted after the zip is written")
+            }
+        }
+        corruptZipEntryName(target, poisonedEntryName)
+    }
+
+    private fun corruptZipEntryName(zipFile: File, originalEntryName: String): Unit {
+        val original = originalEntryName.toByteArray(StandardCharsets.UTF_8)
+        val corrupted = original.copyOf()
+        val poisonIndex = originalEntryName.indexOf("malformed")
+        check(poisonIndex >= 0) { "Expected malformed marker in test entry name" }
+        corrupted[poisonIndex] = 0xC3.toByte()
+        corrupted[poisonIndex + 1] = 0x28.toByte()
+
+        val bytes = Files.readAllBytes(zipFile.toPath())
+        val replacements = replaceAllOccurrences(bytes, original, corrupted)
+        check(replacements >= 2) { "Expected to patch local header and central directory entry name" }
+        Files.write(zipFile.toPath(), bytes)
+    }
+
+    private fun replaceAllOccurrences(bytes: ByteArray, original: ByteArray, replacement: ByteArray): Int {
+        require(original.size == replacement.size) { "Replacement must keep entry length stable" }
+        var replacements = 0
+        var index = 0
+        while (index <= bytes.size - original.size) {
+            if (!matchesAt(bytes, original, index)) {
+                index += 1
+                continue
+            }
+            replacement.copyInto(bytes, destinationOffset = index)
+            replacements += 1
+            index += original.size
+        }
+        return replacements
+    }
+
+    private fun matchesAt(bytes: ByteArray, expected: ByteArray, offset: Int): Boolean {
+        for (i in expected.indices) {
+            if (bytes[offset + i] != expected[i]) {
+                return false
+            }
+        }
+        return true
     }
 
     private fun writeEntry(zip: ZipOutputStream, path: String, content: String): Unit {
